@@ -3,25 +3,25 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 model User {
   id                                                              Int                        @id @default(autoincrement())
-  email                                                           String                     @unique(map: "sqlite_autoindex_users_1")
+  email                                                           String                     @unique
   password                                                        String
   fullName                                                        String                     @map("full_name")
-  username                                                        String                     @unique(map: "sqlite_autoindex_users_2")
+  username                                                        String                     @unique
   role                                                            String
   permissions                                                     String?
   location                                                        String?
   zone                                                            String?
-  isActive                                                        Int?                       @default(1) @map("is_active")
-  createdAt                                                       DateTime?                  @default(now()) @map("created_at")
-  updatedAt                                                       DateTime?                  @default(now()) @map("updated_at")
-  phoneNumber                                                     String?                    @map("phone_number")
+  isActive                                                        Boolean?                  @default(true) @map("is_active")
+  createdAt                                                       DateTime?                 @default(now()) @map("created_at")
+  updatedAt                                                       DateTime?                 @default(now()) @map("updated_at")
+  phoneNumber                                                     String?                   @map("phone_number")
   address                                                         String?
-  zipCode                                                         String?                    @map("zip_code")
+  zipCode                                                         String?                   @map("zip_code")
   avatar                                                          String?
   agent_suspensions_agent_suspensions_approved_by_user_idTousers  agent_suspensions[]        @relation("agent_suspensions_approved_by_user_idTousers")
   agent_suspensions_agent_suspensions_suspended_by_user_idTousers agent_suspensions[]        @relation("agent_suspensions_suspended_by_user_idTousers")
