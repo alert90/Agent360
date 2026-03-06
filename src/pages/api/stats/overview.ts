@@ -1,115 +1,109 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const db = new Database('agent360.db')
-
   try {
     if (req.method === 'GET') {
       // Get total agents
-      const agentsCount = db.prepare('SELECT COUNT(*) as count FROM agents WHERE is_active = 1').get() as any
+      const agentsCount = await prisma.agent.count({ where: { isActive: 1 } })
 
       // Get total transactions
-      const transactionsCount = db.prepare('SELECT COUNT(*) as count FROM transactions').get() as any
+      const transactionsCount = await prisma.transaction.count()
 
       // Get total amounts
-      const totalAmounts = db
-        .prepare(
-          `
-        SELECT
-          COALESCE(SUM(amount), 0) as total_amount,
-          COALESCE(AVG(amount), 0) as avg_amount
-        FROM transactions
-      `
-        )
-        .get() as any
+      const totalAmounts = await prisma.transaction.aggregate({
+        _sum: { amount: true },
+        _avg: { amount: true }
+      })
 
       // Get total commissions
-      const totalCommissions = db
-        .prepare('SELECT COALESCE(SUM(commission_amount), 0) as total FROM transactions')
-        .get() as any
+      const totalCommissions = await prisma.transaction.aggregate({
+        _sum: { commissionAmount: true }
+      })
 
-      // Get top performing agent
-      const topAgentQuery = `
+      // Get top performing agent using raw query
+      const topAgent = await prisma.$queryRawUnsafe(`
         SELECT
           a.name,
-          a.account_number,
+          a.account_number as "accountNumber",
           COUNT(t.id) as transaction_count,
-          COALESCE(SUM(t.amount), 0) as total_amount
+          COALESCE(SUM(t.amount), 0)::numeric as total_amount
         FROM agents a
         LEFT JOIN transactions t ON a.id = t.agent_id
         WHERE a.is_active = 1
         GROUP BY a.id
         ORDER BY total_amount DESC
         LIMIT 1
-      `
-      const topAgent = db.prepare(topAgentQuery).get() as any
+      `)
 
       // Get recent activity (last 7 days)
-      const recentActivityQuery = `
+      const recentActivity = await prisma.$queryRawUnsafe(`
         SELECT
           DATE(timestamp) as date,
-          COUNT(*) as transactions,
-          COALESCE(SUM(amount), 0) as total_amount
+          COUNT(*)::integer as transactions,
+          COALESCE(SUM(amount), 0)::numeric as total_amount
         FROM transactions
-        WHERE DATE(timestamp) >= DATE('now', '-7 days')
+        WHERE timestamp >= NOW() - INTERVAL '7 days'
         GROUP BY DATE(timestamp)
         ORDER BY date DESC
-      `
-      const recentActivity = db.prepare(recentActivityQuery).all() as any[]
+      `)
 
       // Get total users count
-      const usersCount = db.prepare('SELECT COUNT(*) as count FROM users WHERE is_active = 1').get() as any
+      const usersCount = await prisma.user.count({ where: { isActive: true } })
 
       // Get active users count
-      const activeUsersCount = db.prepare('SELECT COUNT(*) as count FROM users WHERE is_active = 1').get() as any
+      const activeUsersCount = await prisma.user.count({ where: { isActive: true } })
 
       // Get active agents count
-      const activeAgentsCount = db.prepare('SELECT COUNT(*) as count FROM agents WHERE is_active = 1').get() as any
+      const activeAgentsCount = await prisma.agent.count({ where: { isActive: 1 } })
 
       // Calculate percentages
-      const userPercentage = usersCount?.count > 0 ? Math.round((activeUsersCount?.count / usersCount?.count) * 100) : 0
-      const agentPercentage =
-        agentsCount?.count > 0 ? Math.round((activeAgentsCount?.count / agentsCount?.count) * 100) : 0
-      const transactionPercentage =
-        transactionsCount?.count > 0 ? Math.round((transactionsCount?.count / transactionsCount?.count) * 100) : 0
+      const userPercentage = usersCount > 0 ? Math.round((activeUsersCount / usersCount) * 100) : 0
+      const agentPercentage = agentsCount > 0 ? Math.round((activeAgentsCount / agentsCount) * 100) : 0
+      const transactionPercentage = transactionsCount > 0 ? 100 : 0
       const commissionPercentage =
-        totalAmounts?.total_amount > 0 ? Math.round((totalCommissions?.total / totalAmounts?.total_amount) * 100) : 0
+        (totalAmounts._sum.amount || 0) > 0
+          ? Math.round(((totalCommissions._sum.commissionAmount || 0) / Number(totalAmounts._sum.amount)) * 100)
+          : 0
+
+      const topAgentData = Array.isArray(topAgent) && topAgent.length > 0 ? topAgent[0] : null
 
       const stats = {
         users: {
-          total: usersCount?.count || 0,
-          active: activeUsersCount?.count || 0,
+          total: usersCount || 0,
+          active: activeUsersCount || 0,
           percentage: `${userPercentage}%`
         },
         agents: {
-          total: agentsCount?.count || 0,
-          active: activeAgentsCount?.count || 0,
+          total: agentsCount || 0,
+          active: activeAgentsCount || 0,
           percentage: `${agentPercentage}%`
         },
         transactions: {
-          total: transactionsCount?.count || 0,
+          total: transactionsCount || 0,
           percentage: `${transactionPercentage}%`
         },
         commissions: {
-          total: totalCommissions?.total || 0,
+          total: totalCommissions._sum.commissionAmount || 0,
           percentage: `${commissionPercentage}%`
         },
-        totalAmount: totalAmounts?.total_amount || 0,
-        avgTransactionAmount: totalAmounts?.avg_amount || 0,
-        topPerformingAgent: topAgent
+        totalAmount: totalAmounts._sum.amount || 0,
+        avgTransactionAmount: totalAmounts._avg.amount || 0,
+        topPerformingAgent: topAgentData
           ? {
-              name: topAgent.name,
-              accountNumber: topAgent.account_number,
-              transactions: topAgent.transaction_count,
-              amount: topAgent.total_amount
+              name: topAgentData.name,
+              accountNumber: topAgentData.accountNumber,
+              transactions: Number(topAgentData.transaction_count),
+              amount: Number(topAgentData.total_amount)
             }
           : null,
-        recentActivity: recentActivity.map(activity => ({
-          date: activity.date,
-          transactions: activity.transactions,
-          amount: activity.total_amount
-        }))
+        recentActivity: Array.isArray(recentActivity)
+          ? recentActivity.map((activity: any) => ({
+              date: activity.date,
+              transactions: Number(activity.transactions),
+              amount: Number(activity.total_amount)
+            }))
+          : []
       }
 
       res.status(200).json({
@@ -127,7 +121,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: 'Failed to fetch statistics',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }

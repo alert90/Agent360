@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query
@@ -8,12 +8,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ message: 'Transaction ID is required' })
   }
 
-  const db = new Database('agent360.db')
-
   try {
     if (req.method === 'GET') {
-      // Get detailed transaction information
-      const transactionQuery = `
+      // Get detailed transaction information using raw query
+      // Note: id can be either numeric ID or transaction_id string
+      const numericId = parseInt(id)
+      const transaction = (await prisma.$queryRawUnsafe(
+        `
         SELECT
           t.*,
           a.name as agent_name,
@@ -25,107 +26,110 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         FROM transactions t
         LEFT JOIN agents a ON t.agent_id = a.id
         LEFT JOIN agents parent_agent ON a.parent_agent_id = parent_agent.id
-        WHERE t.id = ? OR t.transaction_id = ?
-      `
+        WHERE t.id = $1 OR t.transaction_id = $2
+      `,
+        numericId,
+        id
+      )) as any[]
 
-      const transaction = db.prepare(transactionQuery).get(id, id) as any
-
-      if (!transaction) {
+      if (!transaction || transaction.length === 0) {
         return res.status(404).json({ message: 'Transaction not found' })
       }
 
+      const tx = transaction[0]
+
       // Get related transactions (same transaction_id for grouped transactions)
-      const relatedTransactions = db
-        .prepare(
-          `
+      const relatedTransactions = (await prisma.$queryRawUnsafe(
+        `
         SELECT
           t.*,
           a.name as agent_name,
           a.account_number as agent_account
         FROM transactions t
         LEFT JOIN agents a ON t.agent_id = a.id
-        WHERE t.transaction_id = ? AND t.id != ?
+        WHERE t.transaction_id = $1 AND t.id != $2
         ORDER BY t.timestamp ASC
-      `
-        )
-        .all(transaction.transaction_id, transaction.id) as any[]
+      `,
+        tx.transaction_id,
+        tx.id
+      )) as any[]
 
       // Calculate commission details
       let commissionBreakdown = {}
 
-      if (transaction.agent_type === 'local_agent') {
+      if (tx.agent_type === 'local_agent') {
         commissionBreakdown = {
           type: 'local_agent',
           description: 'Direct commission on transaction',
-          rate: '5%', // This should come from config
-          amount: transaction.commission_amount || 0
+          rate: '5%',
+          amount: tx.commission_amount || 0
         }
-      } else if (transaction.agent_type === 'super_agent') {
+      } else if (tx.agent_type === 'super_agent') {
         commissionBreakdown = {
           type: 'super_agent',
           description: 'Commission from served agents',
-          rate: '20% of agent commissions', // This should come from config
-          amount: transaction.commission_amount || 0
+          rate: '20% of agent commissions',
+          amount: tx.commission_amount || 0
         }
-      } else if (transaction.agent_type === 'franchise') {
+      } else if (tx.agent_type === 'franchise') {
         commissionBreakdown = {
           type: 'franchise',
           description: 'Commission based on agent performance',
-          rate: 'Based on turnover multiplier', // This should come from config
-          amount: transaction.commission_amount || 0
+          rate: 'Based on turnover multiplier',
+          amount: tx.commission_amount || 0
         }
       }
 
       // Format transaction data for invoice-like display
       const invoiceData = {
         transaction: {
-          id: transaction.transaction_id,
-          internalId: transaction.id,
-          date: new Date(transaction.timestamp).toLocaleDateString('en-US', {
+          id: tx.transaction_id,
+          internalId: tx.id,
+          date: new Date(tx.timestamp).toLocaleDateString('en-US', {
             year: 'numeric',
             month: 'long',
             day: 'numeric',
             hour: '2-digit',
             minute: '2-digit'
           }),
-          status: transaction.status,
-          type: transaction.type,
-          channel: transaction.channel,
-          location: transaction.location,
-          zone: transaction.zone
+          status: tx.status,
+          type: tx.type,
+          channel: tx.channel,
+          location: tx.location,
+          zone: tx.zone
         },
         customer: {
-          name: transaction.customer_name || 'N/A',
-          account: transaction.customer_account || 'N/A',
-          phone: transaction.customer_phone || 'N/A'
+          name: tx.customer_name || 'N/A',
+          account: tx.customer_account || 'N/A',
+          phone: tx.customer_phone || 'N/A'
         },
         agent: {
-          id: transaction.agent_id,
-          name: transaction.agent_name,
-          account: transaction.agent_account,
-          type: transaction.agent_type,
-          branch: transaction.agent_branch,
-          parentAgent: transaction.parent_agent_name
+          id: tx.agent_id,
+          name: tx.agent_name,
+          account: tx.agent_account,
+          type: tx.agent_type,
+          branch: tx.agent_branch,
+          parentAgent: tx.parent_agent_name
             ? {
-                name: transaction.parent_agent_name,
-                account: transaction.parent_agent_account
+                name: tx.parent_agent_name,
+                account: tx.parent_agent_account
               }
             : null
         },
         financial: {
-          amount: transaction.amount,
-          fee: transaction.fee || 0,
-          netAmount: transaction.net_amount || transaction.amount,
-          commissionAmount: transaction.commission_amount || 0,
-          commissionEligible: transaction.commission_eligible
+          amount: tx.amount,
+          fee: tx.fee || 0,
+          netAmount: tx.net_amount || tx.amount,
+          commissionAmount: tx.commission_amount || 0,
+          commissionEligible: tx.commission_eligible
         },
         details: {
-          narration: transaction.narration || 'N/A',
-          reference: transaction.reference || 'N/A',
-          initiatedBy: transaction.initiated_by || 'customer'
+          narration: tx.narration || 'N/A',
+          reference: tx.reference || 'N/A',
+          initiatedBy: tx.initiated_by || 'customer'
         },
         commissionBreakdown,
-        relatedTransactions: relatedTransactions.map(rt => ({
+        relatedTransactions: relatedTransactions.map((rt: any) => ({
           id: rt.id,
           agent: rt.agent_name,
           account: rt.agent_account,
@@ -133,8 +137,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           commission: rt.commission_amount || 0
         })),
         metadata: {
-          createdAt: transaction.created_at,
-          updatedAt: transaction.updated_at
+          createdAt: tx.created_at,
+          updatedAt: tx.updated_at
         }
       }
 
@@ -153,7 +157,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: 'Failed to fetch transaction details',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }

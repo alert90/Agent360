@@ -1,10 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 import jwt from 'jsonwebtoken'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const db = new Database('agent360.db')
-
   try {
     if (req.method !== 'GET') {
       return res.status(405).json({ message: 'Method not allowed' })
@@ -17,7 +15,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const decoded = jwt.verify(token, process.env.NEXT_PUBLIC_JWT_SECRET!) as any
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(decoded.id) as any
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.id }
+    })
 
     if (!user) {
       return res.status(401).json({ message: 'User not found' })
@@ -26,7 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const {
       search = '',
       page = 1,
-      limit = 100, // Increased default limit to show more transactions
+      limit = 100,
       type = '',
       status = '',
       startDate = '',
@@ -36,121 +36,108 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } = req.query
 
     const offset = (Number(page) - 1) * Number(limit)
-    let whereClause = 'WHERE 1=1'
-    const params: any[] = []
+
+    // Build where clause
+    const whereClause: any = {}
 
     // Apply role-based filtering
     if (user.role === 'agent') {
-      whereClause += ' AND agent_id = ?'
-      params.push(user.id)
+      whereClause.agentId = user.id
     } else if (user.role === 'super_agent' || user.role === 'franchise') {
       // Get agents under this user
-      const userAgents = db.prepare('SELECT id FROM agents WHERE parent_agent_id = ?').all(user.id) as any[]
+      const userAgents = await prisma.agent.findMany({
+        where: { parentAgentId: user.id },
+        select: { id: true }
+      })
       if (userAgents.length > 0) {
-        const agentIds = userAgents.map(agent => agent.id)
-        whereClause += ` AND agent_id IN (${agentIds.join(',')})`
+        whereClause.agentId = { in: userAgents.map(a => a.id) }
       } else {
-        whereClause += ' AND 1=0' // No agents under this user
+        whereClause.id = 0 // No agents under this user
       }
     }
 
-    // Add search filter
+    // Add search filter - include customerAccount for searching by account number
     if (search) {
-      whereClause += ' AND (agent_name LIKE ? OR customer_name LIKE ? OR transaction_id LIKE ? OR narration LIKE ?)'
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`)
+      whereClause.OR = [
+        { agentName: { contains: search as string, mode: 'insensitive' } },
+        { customerName: { contains: search as string, mode: 'insensitive' } },
+        { customerAccount: { contains: search as string, mode: 'insensitive' } },
+        { transactionId: { contains: search as string, mode: 'insensitive' } },
+        { narration: { contains: search as string, mode: 'insensitive' } }
+      ]
     }
 
     // Add type filter
     if (type && type !== 'all') {
-      whereClause += ' AND type = ?'
-      params.push(type)
+      whereClause.type = type
     }
 
     // Add status filter
     if (status && status !== 'all') {
-      whereClause += ' AND status = ?'
-      params.push(status)
+      whereClause.status = status
     }
 
     // Add date range filter
-    if (startDate) {
-      whereClause += ' AND timestamp >= ?'
-      params.push(startDate)
-    }
-    if (endDate) {
-      whereClause += ' AND timestamp <= ?'
-      params.push(endDate)
+    if (startDate || endDate) {
+      whereClause.timestamp = {}
+      if (startDate) {
+        whereClause.timestamp.gte = new Date(startDate as string)
+      }
+      if (endDate) {
+        whereClause.timestamp.lte = new Date(endDate as string)
+      }
     }
 
     // Validate sort column
     const validSortColumns = [
       'timestamp',
       'amount',
-      'commission_amount',
-      'agent_name',
-      'customer_name',
+      'commissionAmount',
+      'agentName',
+      'customerName',
       'type',
       'status',
-      'transaction_id'
+      'transactionId'
     ]
-    const validSortOrder = ['asc', 'desc']
-
     const finalSortBy = validSortColumns.includes(sortBy as string) ? sortBy : 'timestamp'
-    const finalSortOrder = validSortOrder.includes(sortOrder as string) ? sortOrder : 'desc'
+    const finalSortOrder = sortOrder === 'asc' ? 'asc' : 'desc'
+
+    // Map sort column to Prisma format
+    const sortColumnMap: Record<string, string> = {
+      timestamp: 'timestamp',
+      amount: 'amount',
+      commission_amount: 'commissionAmount',
+      agent_name: 'agentName',
+      customer_name: 'customerName',
+      type: 'type',
+      status: 'status',
+      transaction_id: 'transactionId'
+    }
+    const prismaSortBy = sortColumnMap[finalSortBy as string] || 'timestamp'
 
     // Get transactions with pagination
-    const transactionsQuery = `
-      SELECT
-        id,
-        transaction_id as transactionId,
-        agent_id as agentId,
-        agent_name as agentName,
-        customer_name as customerName,
-        customer_phone as customerPhone,
-        customer_account as customerAccount,
-        type,
-        amount,
-        fee,
-        net_amount as netAmount,
-        commission_amount as commissionAmount,
-        commission_eligible as commissionEligible,
-        status,
-        location,
-        zone,
-        channel,
-        narration,
-        reference,
-        initiated_by as initiatedBy,
-        timestamp,
-        created_at as createdAt
-      FROM transactions
-      ${whereClause}
-      ORDER BY ${finalSortBy} ${(finalSortOrder as string).toUpperCase()}
-      LIMIT ? OFFSET ?
-    `
-
-    const transactions = db.prepare(transactionsQuery).all(...params, Number(limit), offset)
-
-    // Get total count for pagination
-    const countQuery = `
-      SELECT COUNT(*) as total
-      FROM transactions
-      ${whereClause}
-    `
-    const countResult = db.prepare(countQuery).get(...params)
-    const total = (countResult as any)?.total || 0
+    const [transactions, total] = await Promise.all([
+      prisma.transaction.findMany({
+        where: whereClause,
+        orderBy: { [prismaSortBy]: finalSortOrder },
+        skip: offset,
+        take: Number(limit)
+      }),
+      prisma.transaction.count({ where: whereClause })
+    ])
 
     // Calculate statistics
-    const statsQuery = `
-      SELECT
-        COUNT(*) as totalTransactions,
-        COALESCE(SUM(amount), 0) as totalAmount,
-        COALESCE(SUM(commission_amount), 0) as totalCommission,
-        COALESCE(AVG(amount), 0) as avgTransactionAmount
-      FROM transactions
-      ${whereClause}
-    `
-    const stats = db.prepare(statsQuery).get(...params) as any
+    const stats = await prisma.transaction.aggregate({
+      where: whereClause,
+      _count: { id: true },
+      _sum: {
+        amount: true,
+        commissionAmount: true
+      },
+      _avg: {
+        amount: true
+      }
+    })
 
     res.status(200).json({
       success: true,
@@ -162,10 +149,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         totalPages: Math.ceil(total / Number(limit))
       },
       stats: {
-        totalTransactions: stats.totalTransactions || 0,
-        totalAmount: stats.totalAmount || 0,
-        totalCommission: stats.totalCommission || 0,
-        avgTransactionAmount: stats.avgTransactionAmount || 0
+        totalTransactions: stats._count.id || 0,
+        totalAmount: stats._sum.amount || 0,
+        totalCommission: stats._sum.commissionAmount || 0,
+        avgTransactionAmount: stats._avg.amount || 0
       }
     })
   } catch (error) {
@@ -175,7 +162,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: 'Failed to fetch transactions',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }

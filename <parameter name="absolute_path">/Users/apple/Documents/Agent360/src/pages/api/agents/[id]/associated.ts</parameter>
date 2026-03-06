@@ -1,0 +1,92 @@
+import { NextApiRequest, NextApiResponse } from 'next/types'
+import { prisma } from 'src/lib/prisma'
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ message: 'Method not allowed' })
+  }
+
+  const { id } = req.query
+
+  if (!id) {
+    return res.status(400).json({ message: 'Agent ID is required' })
+  }
+
+  const agentId = parseInt(id as string)
+
+  try {
+    // Get the agent to verify it exists and check its type
+    const agent = await prisma.agent.findUnique({
+      where: { id: agentId }
+    })
+
+    if (!agent) {
+      return res.status(404).json({
+        success: false,
+        message: 'Agent not found'
+      })
+    }
+
+    // Only super agents and franchises can have associated agents
+    if (agent.type !== 'super_agent' && agent.type !== 'franchise') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only super agents and franchises can have associated agents'
+      })
+    }
+
+    // Get all agents assigned to this super agent or franchise
+    const associatedAgents = await prisma.agent.findMany({
+      where: {
+        parentAgentId: agentId
+      },
+      orderBy: { name: 'asc' }
+    })
+
+    // Get transaction counts and totals for each associated agent
+    const agentsWithStats = await Promise.all(
+      associatedAgents.map(async assocAgent => {
+        const transactionStats = await prisma.transaction.aggregate({
+          where: { agentId: assocAgent.id },
+          _count: true,
+          _sum: {
+            amount: true
+          }
+        })
+
+        // Get the assignment date from agent_assignments table if it exists
+        const assignment = await prisma.agentAssignment.findFirst({
+          where: {
+            localAgentId: assocAgent.id,
+            status: 'active',
+            OR: [{ superAgentId: agentId }, { franchiseId: agentId }]
+          },
+          orderBy: { assignedAt: 'desc' }
+        })
+
+        return {
+          id: String(assocAgent.id),
+          name: assocAgent.name,
+          account_number: assocAgent.accountNumber,
+          type: assocAgent.type,
+          is_active: assocAgent.isActive === 1,
+          assigned_at: assignment?.assignedAt?.toISOString() || new Date().toISOString(),
+          total_transactions: transactionStats._count,
+          total_amount: transactionStats._sum.amount || 0
+        }
+      })
+    )
+
+    res.status(200).json({
+      success: true,
+      data: agentsWithStats
+    })
+  } catch (error) {
+    console.error('Error fetching associated agents:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch associated agents',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    })
+  }
+}

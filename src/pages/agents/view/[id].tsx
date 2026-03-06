@@ -37,16 +37,17 @@ import { DataGrid } from '@mui/x-data-grid'
 import Icon from 'src/@core/components/icon'
 
 interface Agent {
-  id: string
+  id: number
   name: string
-  account_number: string
+  accountNumber: string
   type: string
-  is_active: boolean
-  parent_agent_id?: string
-  email?: string
-  phone?: string
+  isActive: number
+  parentAgentId?: number | null
+  email?: string | null
+  phone?: string | null
+  contact?: string | null
   address?: string
-  created_at: string
+  createdAt: Date | string
 }
 
 interface Transaction {
@@ -69,7 +70,7 @@ interface Transaction {
 }
 
 interface AssociatedAgent {
-  id: string
+  id: number
   name: string
   account_number: string
   type: string
@@ -79,19 +80,65 @@ interface AssociatedAgent {
   total_amount: number
 }
 
+interface TransactionAgent {
+  id: number | null
+  name: string
+  account_number: string
+  type: string
+  is_active: boolean
+  parent_agent_id: number | null
+  transaction_count: number
+  total_amount: number
+  last_transaction_date: string | null
+  transaction_types: string
+  is_detected: boolean
+  is_assigned: boolean
+}
+
+interface TransactionAgentsMeta {
+  threshold: number
+  agent_type: string
+  detected_type: string | null
+  is_auto_detected: boolean
+  total_detected: number
+  assigned_count: number
+  unassigned_count: number
+}
+
 const AgentView = () => {
   const router = useRouter()
   const { id, tab } = router.query
 
   const [agent, setAgent] = useState<Agent | null>(null)
   const [associatedAgents, setAssociatedAgents] = useState<AssociatedAgent[]>([])
+  const [transactionAgents, setTransactionAgents] = useState<TransactionAgent[]>([])
+  const [transactionAgentsMeta, setTransactionAgentsMeta] = useState<TransactionAgentsMeta | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
   const [currentTab, setCurrentTab] = useState((tab as string) || 'transactions')
   const [transactionPagination, setTransactionPagination] = useState({ page: 0, pageSize: 25 })
+  const [assigningAgent, setAssigningAgent] = useState<string | null>(null)
 
   // Agent search state
   const [agentSearchTerm, setAgentSearchTerm] = useState('')
+
+  // Transaction agent search and pagination state
+  const [transactionAgentSearchTerm, setTransactionAgentSearchTerm] = useState('')
+  const [transactionAgentPagination, setTransactionAgentPagination] = useState({ page: 0, pageSize: 25 })
+
+  // Transaction agent filter state
+  const [transactionAgentFilter, setTransactionAgentFilter] = useState<'all' | 'assigned' | 'unassigned'>('all')
+
+  // Helper to check if agent should show Agents tab (either explicitly or auto-detected or has transaction agents)
+  const shouldShowAgentsTab = (): boolean => {
+    if (!agent) return false
+
+    // Show Agents tab if agent is super_agent/franchise OR has transaction agents detected
+    if (agent.type === 'super_agent' || agent.type === 'franchise') return true
+    if (transactionAgentsMeta && transactionAgentsMeta.total_detected > 0) return true
+
+    return false
+  }
 
   const fetchAgentDetails = useCallback(async () => {
     try {
@@ -110,7 +157,18 @@ const AgentView = () => {
   }, [id])
 
   const fetchAssociatedAgents = useCallback(async () => {
-    if (!agent || (agent.type !== 'super_agent' && agent.type !== 'franchise')) {
+    // For auto-detected agents, we should still try to fetch associated agents
+    if (!agent) {
+      setAssociatedAgents([])
+
+      return
+    }
+
+    // Check if agent is super_agent/franchise either explicitly or auto-detected
+    const isSuperOrFranchise =
+      agent.type === 'super_agent' || agent.type === 'franchise' || transactionAgentsMeta?.is_auto_detected
+
+    if (!isSuperOrFranchise) {
       setAssociatedAgents([])
 
       return
@@ -127,7 +185,93 @@ const AgentView = () => {
     } catch (error) {
       console.error('Error fetching associated agents:', error)
     }
-  }, [agent, id])
+  }, [agent, id, transactionAgentsMeta?.is_auto_detected])
+
+  // Fetch transaction-detected agents (potential super_agents/franchises)
+  const fetchTransactionAgents = useCallback(async () => {
+    // For now, always try to fetch - the API will handle the logic of returning empty
+    // if the agent is truly a local_agent without transaction history
+    // We'll check after getting response to determine if we should show Agents tab
+
+    try {
+      const response = await fetch(`/api/agents/${id}/transaction-agents`)
+      if (response.ok) {
+        const result = await response.json()
+        if (result.success) {
+          setTransactionAgents(result.data)
+          setTransactionAgentsMeta(result.meta)
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching transaction agents:', error)
+    }
+  }, [id])
+
+  // Handle assigning a transaction-detected agent
+  const handleAssignAgent = async (targetAgentId: number, accountNumber: string) => {
+    setAssigningAgent(accountNumber)
+    try {
+      const response = await fetch(`/api/agents/${id}/assign-transaction-agent`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          target_agent_id: targetAgentId,
+          target_account_number: accountNumber
+        })
+      })
+
+      const result = await response.json()
+      if (result.success) {
+        // Refresh the transaction agents list
+        await fetchTransactionAgents()
+
+        // Also refresh associated agents
+        await fetchAssociatedAgents()
+      } else {
+        alert(result.message || 'Failed to assign agent')
+      }
+    } catch (error) {
+      console.error('Error assigning agent:', error)
+      alert('Failed to assign agent')
+    } finally {
+      setAssigningAgent(null)
+    }
+  }
+
+  // Handle unassigning an agent (works for both transaction-detected and manually assigned)
+  const handleUnassignAgent = async (targetAgentId: number, accountNumber: string) => {
+    if (!confirm(`Are you sure you want to unassign ${accountNumber}?`)) {
+      return
+    }
+
+    setAssigningAgent(accountNumber)
+    try {
+      const response = await fetch(
+        `/api/agents/${id}/assign-transaction-agent?target_agent_id=${targetAgentId}&target_account_number=${accountNumber}`,
+        {
+          method: 'DELETE'
+        }
+      )
+
+      const result = await response.json()
+      if (result.success) {
+        // Refresh the transaction agents list
+        await fetchTransactionAgents()
+
+        // Also refresh associated agents
+        await fetchAssociatedAgents()
+      } else {
+        alert(result.message || 'Failed to unassign agent')
+      }
+    } catch (error) {
+      console.error('Error unassigning agent:', error)
+      alert('Failed to unassign agent')
+    } finally {
+      setAssigningAgent(null)
+    }
+  }
 
   const fetchTransactions = useCallback(async () => {
     if (!agent) {
@@ -137,7 +281,8 @@ const AgentView = () => {
     }
 
     try {
-      const response = await fetch(`/api/agents/${id}/transactions`)
+      // Fetch first page with large limit to get all transactions
+      const response = await fetch(`/api/agents/${id}/transactions?page=1&limit=10000`)
       if (response.ok) {
         const result = await response.json()
         if (result.success) {
@@ -152,8 +297,11 @@ const AgentView = () => {
   useEffect(() => {
     if (id) {
       fetchAgentDetails()
+
+      // Also fetch transaction agents to determine if we should show Agents tab
+      fetchTransactionAgents()
     }
-  }, [id, fetchAgentDetails])
+  }, [id, fetchAgentDetails, fetchTransactionAgents])
 
   useEffect(() => {
     if (agent) {
@@ -161,9 +309,13 @@ const AgentView = () => {
         fetchAssociatedAgents()
       } else if (currentTab === 'transactions') {
         fetchTransactions()
+      } else if (currentTab === 'account') {
+        // Fetch both associated agents and transaction agents for account tab
+        fetchAssociatedAgents()
+        fetchTransactionAgents()
       }
     }
-  }, [agent, currentTab, fetchAssociatedAgents, fetchTransactions])
+  }, [agent, currentTab, fetchAssociatedAgents, fetchTransactions, fetchTransactionAgents])
 
   const handleTabChange = (event: any, newValue: string) => {
     setCurrentTab(newValue)
@@ -187,7 +339,7 @@ const AgentView = () => {
       agent =>
         agent.name.toLowerCase().includes(agentSearchTerm.toLowerCase()) ||
         agent.account_number.toLowerCase().includes(agentSearchTerm.toLowerCase()) ||
-        agent.id.toLowerCase().includes(agentSearchTerm.toLowerCase())
+        String(agent.id).toLowerCase().includes(agentSearchTerm.toLowerCase())
     )
   }
 
@@ -262,8 +414,38 @@ const AgentView = () => {
     )
   }
 
+  // Helper to get display name for agent type
+  const getAgentTypeDisplayName = (type: string | null | undefined): string => {
+    if (!type) return 'UNKNOWN'
+
+    return type.replace('_', ' ').toUpperCase()
+  }
+
+  // Helper to get description for detected agent type
+  const getAgentTypeDescription = (type: string | null | undefined): string => {
+    if (type === 'franchise') {
+      return 'Franchise agents typically transact with both agents (01J7 accounts) and customers. They usually have more deposits than transfers.'
+    }
+    if (type === 'super_agent') {
+      return 'Super agents primarily transact with other agents (01J7 accounts) and rarely with direct customers. They usually have more transfers than deposits.'
+    }
+
+    return ''
+  }
+
   return (
     <Box sx={{ p: 6 }}>
+      {/* Back Button and Agent Header */}
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 4, gap: 2 }}>
+        <Button
+          variant='outlined'
+          startIcon={<Icon icon='tabler:arrow-left' />}
+          onClick={() => router.push('/agents/list')}
+        >
+          Back to Agents
+        </Button>
+      </Box>
+
       {/* Agent Header */}
       <Card sx={{ mb: 6 }}>
         <CardHeader
@@ -277,12 +459,12 @@ const AgentView = () => {
                 variant='outlined'
               />
               <Typography variant='body2' color='text.secondary'>
-                Account: {agent.account_number}
+                Account: {agent.accountNumber}
               </Typography>
               <Chip
-                label={agent.is_active ? 'Active' : 'Inactive'}
+                label={agent.isActive ? 'Active' : 'Inactive'}
                 size='small'
-                color={agent.is_active ? 'success' : 'error'}
+                color={agent.isActive ? 'success' : 'error'}
                 variant='outlined'
               />
             </Box>
@@ -307,7 +489,7 @@ const AgentView = () => {
                 <strong>Email:</strong> {agent.email || 'Not provided'}
               </Typography>
               <Typography variant='body2'>
-                <strong>Phone:</strong> {agent.phone || 'Not provided'}
+                <strong>Phone:</strong> {agent.phone || agent.contact || 'Not provided'}
               </Typography>
               <Typography variant='body2'>
                 <strong>Address:</strong> {agent.address || 'Not provided'}
@@ -321,10 +503,11 @@ const AgentView = () => {
                 <strong>Agent ID:</strong> {agent.id}
               </Typography>
               <Typography variant='body2'>
-                <strong>Account Number:</strong> {agent.account_number}
+                <strong>Account Number:</strong> {agent.accountNumber || 'Not provided'}
               </Typography>
               <Typography variant='body2'>
-                <strong>Created:</strong> {new Date(agent.created_at).toLocaleDateString()}
+                <strong>Created:</strong>{' '}
+                {agent.createdAt ? new Date(agent.createdAt).toLocaleDateString() : 'Not provided'}
               </Typography>
             </Grid>
           </Grid>
@@ -337,13 +520,13 @@ const AgentView = () => {
           <TabList onChange={handleTabChange} aria-label='Agent details tabs'>
             <Tab label='Transactions' value='transactions' />
             <Tab label='Account' value='account' />
-            {(agent.type === 'super_agent' || agent.type === 'franchise') && <Tab label='Agents' value='agents' />}
+            {shouldShowAgentsTab() && <Tab label='Agents' value='agents' />}
           </TabList>
         </Box>
 
         {/* Account Tab */}
         <TabPanel value='account'>
-          <Card>
+          <Card sx={{ mb: 4 }}>
             <CardHeader title='Account Information' />
             <CardContent>
               <Typography variant='body1' sx={{ mb: 2 }}>
@@ -361,10 +544,11 @@ const AgentView = () => {
                     <strong>Agent Type:</strong> {agent.type.replace('_', ' ').toUpperCase()}
                   </Typography>
                   <Typography variant='body2' sx={{ mb: 1 }}>
-                    <strong>Status:</strong> {agent.is_active ? 'Active' : 'Inactive'}
+                    <strong>Status:</strong> {agent.isActive ? 'Active' : 'Inactive'}
                   </Typography>
                   <Typography variant='body2'>
-                    <strong>Member Since:</strong> {new Date(agent.created_at).toLocaleDateString()}
+                    <strong>Member Since:</strong>{' '}
+                    {agent.createdAt ? new Date(agent.createdAt).toLocaleDateString() : 'Not provided'}
                   </Typography>
                 </Grid>
                 <Grid item xs={12} md={6}>
@@ -379,20 +563,244 @@ const AgentView = () => {
                     {transactions.reduce((sum, t) => sum + t.amount, 0).toLocaleString()}
                   </Typography>
                   <Typography variant='body2'>
-                    <strong>Associated Agents:</strong> {associatedAgents.length}
+                    <strong>Associated Agents:</strong>{' '}
+                    {transactionAgentsMeta?.assigned_count || associatedAgents.length} of{' '}
+                    {transactionAgentsMeta?.total_detected || associatedAgents.length} assigned to {agent.name}
                   </Typography>
                 </Grid>
               </Grid>
             </CardContent>
           </Card>
+
+          {/* Associated Agents Section on Account Tab */}
+          <Card>
+            <CardHeader title='Associated Agents' subheader='List of agents assigned to this account' />
+            <CardContent>
+              {associatedAgents.length > 0 ? (
+                <TableContainer component={Paper}>
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Agent Name</TableCell>
+                        <TableCell>Account Number</TableCell>
+                        <TableCell>Type</TableCell>
+                        <TableCell>Status</TableCell>
+                        <TableCell align='right'>Transactions</TableCell>
+                        <TableCell align='right'>Total Amount</TableCell>
+                        <TableCell>Assigned Date</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {associatedAgents.map(assocAgent => (
+                        <TableRow key={assocAgent.id} hover>
+                          <TableCell>
+                            <Typography variant='body2' fontWeight='medium'>
+                              {assocAgent.name}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>{assocAgent.account_number}</TableCell>
+                          <TableCell>
+                            <Chip
+                              label={assocAgent.type.replace('_', ' ').toUpperCase()}
+                              size='small'
+                              color='default'
+                              variant='outlined'
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Chip
+                              label={assocAgent.is_active ? 'Active' : 'Inactive'}
+                              size='small'
+                              color={assocAgent.is_active ? 'success' : 'error'}
+                              variant='outlined'
+                            />
+                          </TableCell>
+                          <TableCell align='right'>{assocAgent.total_transactions}</TableCell>
+                          <TableCell align='right'>TZS {assocAgent.total_amount.toLocaleString()}</TableCell>
+                          <TableCell>{new Date(assocAgent.assigned_at).toLocaleDateString()}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              ) : (
+                <Box sx={{ textAlign: 'center', py: 4 }}>
+                  <Typography variant='body2' color='text.secondary'>
+                    No associated agents found for {agent.name}
+                  </Typography>
+                </Box>
+              )}
+            </CardContent>
+          </Card>
         </TabPanel>
 
         {/* Agents Tab */}
-        {(agent.type === 'super_agent' || agent.type === 'franchise') && (
+        {shouldShowAgentsTab() && (
           <TabPanel value='agents'>
+            {/* Auto-detected type warning */}
+            {transactionAgentsMeta?.is_auto_detected && (
+              <Alert severity='info' sx={{ mb: 3 }}>
+                <Typography variant='body2'>
+                  This agent was automatically detected as a{' '}
+                  <strong>{getAgentTypeDisplayName(transactionAgentsMeta.detected_type)}</strong> based on transaction
+                  patterns ({transactionAgentsMeta.total_detected} agents transacted with).
+                </Typography>
+                <Typography variant='body2' sx={{ mt: 1 }}>
+                  {getAgentTypeDescription(transactionAgentsMeta.detected_type)}
+                </Typography>
+                <Typography variant='body2' sx={{ mt: 1 }}>
+                  The agent type can be updated in agent settings.
+                </Typography>
+              </Alert>
+            )}
+
+            <Card sx={{ mb: 4 }}>
+              <CardHeader
+                title='Transaction-Detected Agents'
+                subheader={
+                  <Typography variant='body2' color='text.secondary'>
+                    Agents detected based on deposit/transfer transactions to accounts starting with 01J7 (threshold:{' '}
+                    {transactionAgentsMeta?.threshold || 10}+ transactions)
+                  </Typography>
+                }
+              />
+              <CardContent>
+                {/* Summary chips */}
+                <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
+                  <Chip
+                    label={`Total Detected: ${transactionAgentsMeta?.total_detected || 0}`}
+                    color='primary'
+                    variant='outlined'
+                  />
+                  <Chip
+                    label={`Assigned: ${transactionAgentsMeta?.assigned_count || 0}`}
+                    color='success'
+                    variant='outlined'
+                  />
+                  <Chip
+                    label={`Unassigned: ${transactionAgentsMeta?.unassigned_count || 0}`}
+                    color='warning'
+                    variant='outlined'
+                  />
+                </Box>
+
+                {transactionAgents.length > 0 ? (
+                  <TableContainer component={Paper}>
+                    <Table>
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Agent Name</TableCell>
+                          <TableCell>Account Number</TableCell>
+                          <TableCell>Type</TableCell>
+                          <TableCell>Status</TableCell>
+                          <TableCell align='right'>Transactions</TableCell>
+                          <TableCell align='right'>Total Amount</TableCell>
+                          <TableCell>Last Transaction</TableCell>
+                          <TableCell>Assignment</TableCell>
+                          <TableCell>Actions</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {transactionAgents.map(txAgent => (
+                          <TableRow key={txAgent.account_number} hover>
+                            <TableCell>
+                              <Typography variant='body2' fontWeight='medium'>
+                                {txAgent.name}
+                              </Typography>
+                            </TableCell>
+                            <TableCell>{txAgent.account_number}</TableCell>
+                            <TableCell>
+                              <Chip
+                                label={txAgent.type.replace('_', ' ').toUpperCase()}
+                                size='small'
+                                color='default'
+                                variant='outlined'
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Chip
+                                label={txAgent.is_active ? 'Active' : 'Inactive'}
+                                size='small'
+                                color={txAgent.is_active ? 'success' : 'error'}
+                                variant='outlined'
+                              />
+                            </TableCell>
+                            <TableCell align='right'>{txAgent.transaction_count}</TableCell>
+                            <TableCell align='right'>TZS {txAgent.total_amount?.toLocaleString() || 0}</TableCell>
+                            <TableCell>
+                              {txAgent.last_transaction_date
+                                ? new Date(txAgent.last_transaction_date).toLocaleDateString()
+                                : 'N/A'}
+                            </TableCell>
+                            <TableCell>
+                              <Chip
+                                label={txAgent.is_assigned ? 'Assigned' : 'Unassigned'}
+                                size='small'
+                                color={txAgent.is_assigned ? 'success' : 'warning'}
+                                variant={txAgent.is_assigned ? 'filled' : 'outlined'}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              {txAgent.id ? (
+                                <Box sx={{ display: 'flex', gap: 1 }}>
+                                  <Button
+                                    size='small'
+                                    variant='outlined'
+                                    startIcon={<Icon icon='tabler:eye' />}
+                                    onClick={() => router.push(`/agents/view/${txAgent.id}`)}
+                                  >
+                                    View
+                                  </Button>
+                                  {txAgent.is_assigned ? (
+                                    <Button
+                                      size='small'
+                                      variant='outlined'
+                                      color='error'
+                                      startIcon={<Icon icon='tabler:user-minus' />}
+                                      onClick={() => handleUnassignAgent(txAgent.id as number, txAgent.account_number)}
+                                      disabled={assigningAgent === txAgent.account_number}
+                                    >
+                                      Unassign
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      size='small'
+                                      variant='contained'
+                                      color='primary'
+                                      startIcon={<Icon icon='tabler:user-plus' />}
+                                      onClick={() => handleAssignAgent(txAgent.id as number, txAgent.account_number)}
+                                      disabled={assigningAgent === txAgent.account_number}
+                                    >
+                                      Assign
+                                    </Button>
+                                  )}
+                                </Box>
+                              ) : (
+                                <Typography variant='body2' color='text.secondary'>
+                                  Not in system
+                                </Typography>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                ) : (
+                  <Box sx={{ textAlign: 'center', py: 4 }}>
+                    <Typography variant='body2' color='text.secondary'>
+                      No transaction-detected agents found. Agents with more than 10 transactions to accounts starting
+                      with 01J7 will appear here.
+                    </Typography>
+                  </Box>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Manually Assigned Agents */}
             <Card>
               <CardHeader
-                title='Associated Agents'
+                title='Manually Assigned Agents'
                 subheader={
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <Typography variant='body2' color='text.secondary'>
@@ -460,14 +868,26 @@ const AgentView = () => {
                             <TableCell align='right'>TZS {assocAgent.total_amount.toLocaleString()}</TableCell>
                             <TableCell>{new Date(assocAgent.assigned_at).toLocaleDateString()}</TableCell>
                             <TableCell>
-                              <Button
-                                size='small'
-                                variant='outlined'
-                                startIcon={<Icon icon='tabler:eye' />}
-                                onClick={() => router.push(`/agents/view/${assocAgent.id}`)}
-                              >
-                                View
-                              </Button>
+                              <Box sx={{ display: 'flex', gap: 1 }}>
+                                <Button
+                                  size='small'
+                                  variant='outlined'
+                                  startIcon={<Icon icon='tabler:eye' />}
+                                  onClick={() => router.push(`/agents/view/${Number(assocAgent.id)}`)}
+                                >
+                                  View
+                                </Button>
+                                <Button
+                                  size='small'
+                                  variant='outlined'
+                                  color='error'
+                                  startIcon={<Icon icon='tabler:user-minus' />}
+                                  onClick={() => handleUnassignAgent(Number(assocAgent.id), assocAgent.account_number)}
+                                  disabled={assigningAgent === assocAgent.account_number}
+                                >
+                                  Unassign
+                                </Button>
+                              </Box>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -479,7 +899,7 @@ const AgentView = () => {
                     <Typography variant='body2' color='text.secondary'>
                       {agentSearchTerm
                         ? 'No agents found matching search criteria'
-                        : `No agents assigned to ${agent.name}`}
+                        : `No agents manually assigned to ${agent.name}`}
                     </Typography>
                   </Box>
                 )}
@@ -548,7 +968,9 @@ const AgentView = () => {
                           transactionSummary.byType.map(typeSummary => (
                             <Chip
                               key={typeSummary.label}
-                              label={`${typeSummary.label.toUpperCase()}: ${typeSummary.count} (TZS ${typeSummary.total.toLocaleString()})`}
+                              label={`${typeSummary.label.toUpperCase()}: ${
+                                typeSummary.count
+                              } (TZS ${typeSummary.total.toLocaleString()})`}
                               size='small'
                               variant='outlined'
                             />

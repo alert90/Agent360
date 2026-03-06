@@ -480,3 +480,13 @@ model CommissionSchedule {
 
   @@map("commission_schedules")
 }
+
+model UploadedFile {
+  id String @id
+  originalName String @map("original_name")
+  filePath String @map("file_path")
+  fileSize Int @map("file_size")
+  uploadedAt DateTime @map("uploaded_at")
+  status String
+  @@map("uploaded_files")
+}

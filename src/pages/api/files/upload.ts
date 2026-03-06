@@ -1,7 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
 import { promises as fs } from 'fs'
 import path from 'path'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 
 export const config = {
   api: {
@@ -15,7 +15,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const chunks: Buffer[] = []
+    const chunks: Uint8Array[] = []
     const boundary = req.headers['content-type']?.split('boundary=')[1]
 
     if (!boundary) {
@@ -72,16 +72,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const filePath = path.join(uploadsDir, `${fileId}_${fileName}`)
     await fs.writeFile(filePath, fileData)
 
-    // Save file metadata to database
-    const db = new Database('agent360.db')
-    const insertFile = db.prepare(`
-      INSERT INTO uploaded_files (
-        id, original_name, file_path, file_size, uploaded_at, status
-      ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 'pending')
-    `)
-
-    insertFile.run(fileId, fileName, filePath, fileData.length)
-    db.close()
+    // Save file metadata to database using Prisma
+    await prisma.uploadedFile.create({
+      data: {
+        id: fileId,
+        originalName: fileName,
+        filePath,
+        fileSize: fileData.length,
+        uploadedAt: new Date(),
+        status: 'pending'
+      }
+    })
 
     return res.status(201).json({
       message: 'File uploaded successfully',

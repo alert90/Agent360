@@ -1,22 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next/types'
 import jwt from 'jsonwebtoken'
-import { PrismaClient } from '@prisma/client'
-import { PrismaPg } from '@prisma/adapter-pg'
-import pg from 'pg'
-
-// Create Prisma client with PostgreSQL adapter
-const createPrismaClient = () => {
-  const databaseUrl = process.env.DATABASE_URL
-  if (!databaseUrl) {
-    throw new Error('DATABASE_URL environment variable is not set')
-  }
-  const pool = new pg.Pool({ connectionString: databaseUrl })
-  const adapter = new PrismaPg(pool)
-
-  return new PrismaClient({ adapter })
-}
-
-const prisma = createPrismaClient()
+import { prisma } from 'src/lib/prisma'
 
 // Helper function to parse user agent
 function parseUserAgent(userAgent: string) {

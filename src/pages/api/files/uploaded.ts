@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 import fs from 'fs'
 import path from 'path'
 
@@ -8,28 +8,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ message: 'Method not allowed' })
   }
 
-  const db = new Database('agent360.db')
-
   try {
     // Get uploaded files from database
-    const files = db
-      .prepare(
-        `
-      SELECT
-        transaction_id,
-        agent_name,
-        customer_name,
-        amount,
-        type,
-        status,
-        timestamp,
-        created_at
-      FROM transactions
-      ORDER BY created_at DESC
-      LIMIT 100
-    `
-      )
-      .all()
+    const files = await prisma.transaction.findMany({
+      orderBy: {
+        createdAt: 'desc'
+      },
+      take: 100,
+      select: {
+        transactionId: true,
+        agentName: true,
+        customerName: true,
+        amount: true,
+        type: true,
+        status: true,
+        timestamp: true,
+        createdAt: true
+      }
+    })
 
     // Also check for physical files in uploads directory
     const uploadsDir = path.join(process.cwd(), 'uploads')
@@ -59,7 +55,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: 'Failed to fetch uploaded files',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }

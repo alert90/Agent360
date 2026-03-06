@@ -1,9 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
 import jwt from 'jsonwebtoken'
-import Database from 'better-sqlite3'
-import { AgentData, AgentConnection, AgentTransaction } from 'src/types/apps/userTypes'
-
-const db = new Database('agent360.db')
+import { prisma } from 'src/lib/prisma'
+import { AgentConnection, AgentTransaction } from 'src/types/apps/userTypes'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -27,12 +25,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { tab = 'profile' } = req.query
 
     // Get user data from database
-    const userStmt = db.prepare(`
-      SELECT id, email, full_name, username, role, permissions, location, zone, is_active, created_at, updated_at
-      FROM users
-      WHERE id = ?
-    `)
-    const user = userStmt.get(decoded.id) as any
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.id },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        username: true,
+        role: true,
+        permissions: true,
+        location: true,
+        zone: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true
+      }
+    })
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' })
@@ -41,11 +49,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Get agent data if user is an agent
     let agentData = null
     if (user.role === 'agent' || user.role === 'super_agent' || user.role === 'franchise') {
-      const agentStmt = db.prepare(`
-        SELECT * FROM agents
-        WHERE name = ? OR account_number = ?
-      `)
-      agentData = agentStmt.get(user.full_name, user.username) as AgentData
+      agentData = await prisma.agent.findFirst({
+        where: {
+          OR: [{ name: user.fullName ?? '' }, { accountNumber: user.username ?? '' }]
+        }
+      })
     }
 
     // Transform data based on tab
@@ -53,31 +61,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       case 'profile':
         const profileData = {
           about: [
-            { property: 'Full Name', value: user.full_name || '', icon: 'tabler:user' },
-            { property: 'Status', value: user.is_active ? 'active' : 'inactive', icon: 'tabler:check' },
-            { property: 'Role', value: user.role || '', icon: 'tabler:crown' },
-            { property: 'Location', value: user.location || 'Not specified', icon: 'tabler:flag' },
-            { property: 'Zone', value: user.zone || 'Not specified', icon: 'tabler:map-pin' }
+            { property: 'Full Name', value: user.fullName ?? '', icon: 'tabler:user' },
+            { property: 'Status', value: user.isActive ? 'active' : 'inactive', icon: 'tabler:check' },
+            { property: 'Role', value: user.role ?? '', icon: 'tabler:crown' },
+            { property: 'Location', value: user.location ?? 'Not specified', icon: 'tabler:flag' },
+            { property: 'Zone', value: user.zone ?? 'Not specified', icon: 'tabler:map-pin' }
           ],
           contacts: [
-            { property: 'Email', value: user.email || '', icon: 'tabler:mail' },
-            { property: 'Username', value: user.username || '', icon: 'tabler:at' },
-            { property: 'Account Number', value: agentData?.account_number || 'N/A', icon: 'tabler:hash' }
+            { property: 'Email', value: user.email ?? '', icon: 'tabler:mail' },
+            { property: 'Username', value: user.username ?? '', icon: 'tabler:at' },
+            { property: 'Account Number', value: agentData?.accountNumber ?? 'N/A', icon: 'tabler:hash' }
           ],
           teams: agentData
             ? [
                 { property: 'Agent Type', value: agentData.type, icon: 'tabler:briefcase', color: 'primary' },
-                { property: 'Branch', value: agentData.branch_name, icon: 'tabler:building', color: 'info' }
+                { property: 'Branch', value: agentData.branchName, icon: 'tabler:building', color: 'info' }
               ]
             : [],
           overview: [
             {
               property: 'Member Since',
-              value: new Date(user.joinDate).toLocaleDateString(),
+              value: user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'Unknown',
               icon: 'tabler:calendar'
             },
             { property: 'Last Updated', value: new Date().toLocaleDateString(), icon: 'tabler:clock' },
-            { property: 'Account Status', value: user.status || 'Active', icon: 'tabler:activity' }
+            { property: 'Account Status', value: user.isActive ? 'Active' : 'Inactive', icon: 'tabler:activity' }
           ],
           connections: [],
           teamsTech: []
@@ -87,9 +95,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       case 'profile-header':
         const headerData = {
-          location: user.location || 'Not specified',
-          joiningDate: new Date(user.created_at).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
-          fullName: user.full_name,
+          location: user.location ?? 'Not specified',
+          joiningDate: user.createdAt
+            ? new Date(user.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+            : 'Unknown',
+          fullName: user.fullName,
           designation: user.role.charAt(0).toUpperCase() + user.role.slice(1).replace('_', ' '),
           profileImg: '/images/avatars/1.png',
           designationIcon: 'tabler:color-swatch',
@@ -104,22 +114,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         if (user.zone) {
           // Get agents in the same zone
-          const zoneAgentsStmt = db.prepare(`
-            SELECT * FROM agents
-            WHERE zone = ? AND is_active = 1
-            ORDER BY type, branch_name
-          `)
-          const zoneAgents = zoneAgentsStmt.all(user.zone) as AgentData[]
+          const zoneAgents = await prisma.agent.findMany({
+            where: { zone: user.zone, isActive: 1 },
+            orderBy: [{ type: 'asc' }, { branchName: 'asc' }]
+          })
 
-          teamsData = zoneAgents.map((agent: any) => ({
+          teamsData = zoneAgents.map(agent => ({
             extraMembers: 0,
             title: `${agent.name} (${agent.type})`,
             avatar: '/images/icons/project-icons/support-label.png',
             avatarGroup: [],
-            description: `${agent.type} at ${agent.branch_name} branch`,
+            description: `${agent.type} at ${agent.branchName} branch`,
             chips: [
               { title: agent.type, color: 'primary' },
-              { title: agent.branch_name, color: 'info' }
+              { title: agent.branchName, color: 'info' }
             ]
           }))
         }
@@ -133,45 +141,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (agentData) {
           if (user.role === 'super_agent' || user.role === 'franchise') {
             // Get child agents connected to this super_agent/franchise
-            const childAgentsStmt = db.prepare(`
-              SELECT a.*, 'child' as relationship
-              FROM agents a
-              WHERE a.parent_agent_id = ? AND a.is_active = 1
-            `)
-            const childAgents = childAgentsStmt.all(agentData.id) as any[]
+            const childAgents = await prisma.agent.findMany({
+              where: { parentAgentId: agentData.id, isActive: 1 }
+            })
 
             connectionsData = childAgents.map(agent => ({
-              id: Number(agent.id),
-              agent_id: Number(agent.id),
+              id: agent.id,
+              agent_id: agent.id,
               agent_name: agent.name,
-              parent_agent_id: Number(agentData.id),
+              parent_agent_id: agentData.id,
               parent_name: agentData.name,
               parent_type: user.role as 'super_agent' | 'franchise',
               relationship: 'child' as const,
-              account_number: agent.account_number,
-              branch_name: agent.branch_name,
-              zone: agent.zone
+              account_number: agent.accountNumber,
+              branch_name: agent.branchName,
+              zone: agent.zone ?? ''
             }))
           } else if (user.role === 'agent') {
             // Get parent connection
-            if (agentData.parent_agent_id) {
-              const parentAgentStmt = db.prepare(`
-                SELECT * FROM agents WHERE id = ?
-              `)
-              const parentAgent = parentAgentStmt.get(agentData.parent_agent_id) as AgentData
+            if (agentData.parentAgentId) {
+              const parentAgent = await prisma.agent.findUnique({
+                where: { id: agentData.parentAgentId }
+              })
 
               if (parentAgent) {
                 connectionsData.push({
-                  id: Number(parentAgent.id),
-                  agent_id: Number(agentData.id),
+                  id: parentAgent.id,
+                  agent_id: agentData.id,
                   agent_name: agentData.name,
-                  parent_agent_id: Number(parentAgent.parent_agent_id || 0),
+                  parent_agent_id: parentAgent.parentAgentId ?? 0,
                   parent_name: parentAgent.name,
                   parent_type: parentAgent.type as 'super_agent' | 'franchise',
                   relationship: 'parent' as const,
-                  account_number: parentAgent.account_number,
-                  branch_name: parentAgent.branch_name,
-                  zone: parentAgent.zone
+                  account_number: parentAgent.accountNumber,
+                  branch_name: parentAgent.branchName,
+                  zone: parentAgent.zone ?? ''
                 })
               }
             }
@@ -185,38 +189,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let transactionsData: AgentTransaction[] = []
 
         if (agentData) {
-          const transactionsStmt = db.prepare(`
-            SELECT * FROM transactions
-            WHERE agent_id = ?
-            ORDER BY created_at DESC
-            LIMIT 50
-          `)
-          transactionsData = transactionsStmt.all(agentData.id) as any[]
+          const transactions = await prisma.transaction.findMany({
+            where: { agentId: agentData.id },
+            orderBy: { createdAt: 'desc' },
+            take: 50
+          })
 
-          // Transform to match expected format
-          transactionsData = transactionsData.map(tx => ({
+          transactionsData = transactions.map(tx => ({
             id: tx.id,
-            transaction_id: tx.transaction_id,
-            agent_id: tx.agent_id,
-            agent_name: tx.agent_name,
-            customer_name: tx.customer_name,
-            customer_phone: tx.customer_phone,
-            customer_account: tx.customer_account,
+            transaction_id: tx.transactionId,
+            agent_id: tx.agentId ?? 0,
+            agent_name: tx.agentName,
+            customer_name: tx.customerName,
+            customer_phone: tx.customerPhone ?? '',
+            customer_account: tx.customerAccount ?? '',
             type: tx.type as 'deposit' | 'withdrawal' | 'transfer' | 'payment',
             amount: tx.amount,
-            fee: tx.fee,
-            net_amount: tx.net_amount,
-            commission_amount: tx.commission_amount,
-            commission_eligible: tx.commission_eligible,
-            status: tx.status,
-            location: tx.location,
-            zone: tx.zone,
-            channel: tx.channel,
-            narration: tx.narration,
-            reference: tx.reference,
-            initiated_by: tx.initiated_by,
-            timestamp: tx.timestamp,
-            created_at: tx.created_at
+            fee: tx.fee ?? 0,
+            net_amount: tx.netAmount ?? 0,
+            commission_amount: tx.commissionAmount ?? 0,
+            commission_eligible: !!(tx.commissionEligible ?? 0),
+            status: tx.status ?? 'pending',
+            location: tx.location ?? '',
+            zone: tx.zone ?? '',
+            channel: tx.channel ?? '',
+            narration: tx.narration ?? '',
+            reference: tx.reference ?? '',
+            initiated_by: tx.initiatedBy ?? 'customer',
+            timestamp: tx.timestamp ? new Date(tx.timestamp).toISOString() : new Date().toISOString(),
+            created_at: tx.createdAt ? new Date(tx.createdAt).toISOString() : new Date().toISOString()
           }))
         }
 
@@ -227,14 +228,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const accountData = {
           id: user.id,
           email: user.email,
-          full_name: user.full_name,
-          username: user.username,
+          full_name: user.fullName ?? '',
+          username: user.username ?? '',
           role: user.role,
-          location: user.location,
-          zone: user.zone,
-          is_active: user.is_active,
-          created_at: user.created_at,
-          updated_at: user.updated_at
+          location: user.location ?? '',
+          zone: user.zone ?? '',
+          is_active: user.isActive ?? true,
+          created_at: user.createdAt ?? new Date(),
+          updated_at: user.updatedAt ?? new Date()
         }
 
         return res.status(200).json(accountData)
@@ -246,7 +247,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.error('Profile API error:', error)
 
     return res.status(500).json({ message: 'Internal server error' })
-  } finally {
-    db.close()
   }
 }

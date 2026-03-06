@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -10,71 +10,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { period, limit = '50' } = req.query
     const limitNum = parseInt(limit as string) || 50
 
-    const db = new Database('agent360.db')
-
-    let query = `
-      SELECT
-        t.transaction_id as id,
-        t.agent_id,
-        a.name as agentName,
-        t.customer_name,
-        t.customer_phone,
-        t.type,
-        t.amount,
-        t.fee,
-        t.net_amount,
-        t.commission_amount,
-        t.commission_eligible,
-        t.status,
-        t.location,
-        t.zone,
-        t.channel,
-        t.narration,
-        t.reference,
-        t.initiated_by,
-        t.timestamp
-      FROM transactions t
-      LEFT JOIN agents a ON t.agent_id = a.id
-    `
-
-    const params: any[] = []
+    // Build where clause
+    const whereClause: any = {}
 
     if (period) {
-      query += ' WHERE t.timestamp LIKE ?'
-      params.push(`${period}%`)
+      // Filter by period (e.g., "2025-01" for January 2025)
+      // Use a date range query for PostgreSQL
+      const periodStr = period as string
+      const startDate = new Date(periodStr + '-01')
+      const endDate = new Date(periodStr + '-31')
+
+      whereClause.timestamp = {
+        gte: startDate,
+        lte: endDate
+      }
     }
 
-    query += ' ORDER BY t.timestamp DESC LIMIT ?'
-    params.push(limitNum)
-
-    const transactions = db.prepare(query).all(...params) as any[]
+    // Get transactions - without include since no relation is defined in Prisma
+    const transactions = await prisma.transaction.findMany({
+      where: whereClause,
+      orderBy: {
+        timestamp: 'desc'
+      },
+      take: limitNum
+    })
 
     // Convert to expected format
     const formattedTransactions = transactions.map(t => ({
-      id: t.id,
-      agentId: t.agent_id,
-      agentName: t.agentName || 'Unknown Agent',
-      customerName: t.customer_name || 'Unknown Customer',
-      customerPhone: t.customer_phone || '',
-      customerAccount: t.customer_phone || '',
+      id: t.transactionId,
+      agentId: t.agentId,
+      agentName: 'Unknown Agent', // Agent name not available without join
+      customerName: t.customerName || 'Unknown Customer',
+      customerPhone: t.customerPhone || '',
+      customerAccount: t.customerPhone || '',
       type: t.type || 'transfer',
       amount: Number(t.amount) || 0,
       fee: Number(t.fee) || 0,
-      netAmount: Number(t.net_amount) || 0,
-      commissionAmount: Number(t.commission_amount) || 0,
-      commissionEligible: t.commission_eligible === 1,
+      netAmount: Number(t.netAmount) || 0,
+      commissionAmount: Number(t.commissionAmount) || 0,
+      commissionEligible: t.commissionEligible === 1,
       status: t.status || 'completed',
       location: t.location || '',
       zone: t.zone || '',
       channel: t.channel || '',
       narration: t.narration || '',
       reference: t.reference || '',
-      initiatedBy: t.initiated_by || 'customer',
-      timestamp: t.timestamp || new Date().toISOString(),
+      initiatedBy: t.initiatedBy || 'customer',
+      timestamp: t.timestamp ? t.timestamp.toISOString() : new Date().toISOString(),
       branchCode: ''
     }))
-
-    db.close()
 
     return res.status(200).json(formattedTransactions)
   } catch (error) {

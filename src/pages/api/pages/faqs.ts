@@ -1,7 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
-
-const db = new Database('agent360.db')
+import { prisma } from 'src/lib/prisma'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -12,46 +10,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { q } = req.query
 
     // Fetch all FAQ categories
-    const categoriesStmt = db.prepare(`
-      SELECT id, slug, title, icon, subtitle, order_index
-      FROM faq_categories
-      WHERE is_active = 1
-      ORDER BY order_index
-    `)
-    const categories = categoriesStmt.all() as any[]
+    const categories = await prisma.faqCategory.findMany({
+      where: { isActive: 1 },
+      orderBy: { orderIndex: 'asc' },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        icon: true,
+        subtitle: true,
+        orderIndex: true
+      }
+    })
 
     const faqData: Record<string, any> = {}
 
     for (const category of categories) {
-      // Fetch questions for this category
-      let questionsStmt
       let questions
 
       if (q && typeof q === 'string') {
-        // Search in questions and answers
-        const queryLowered = q.toLowerCase()
-        questionsStmt = db.prepare(`
-          SELECT slug, question, answer
-          FROM faq_questions
-          WHERE category_id = ? AND is_active = 1
-          ORDER BY order_index
-        `)
-        questions = questionsStmt.all(category.id) as any[]
+        // Fetch all questions and filter in memory (case insensitive)
+        const allQuestions = await prisma.faqQuestion.findMany({
+          where: { categoryId: category.id, isActive: 1 },
+          orderBy: { orderIndex: 'asc' },
+          select: {
+            slug: true,
+            question: true,
+            answer: true
+          }
+        })
 
-        // Filter questions based on search
-        questions = questions.filter(
-          (question: any) =>
+        const queryLowered = q.toLowerCase()
+        questions = allQuestions.filter(
+          question =>
             question.question.toLowerCase().includes(queryLowered) ||
             question.answer.toLowerCase().includes(queryLowered)
         )
       } else {
-        questionsStmt = db.prepare(`
-          SELECT slug, question, answer
-          FROM faq_questions
-          WHERE category_id = ? AND is_active = 1
-          ORDER BY order_index
-        `)
-        questions = questionsStmt.all(category.id) as any[]
+        questions = await prisma.faqQuestion.findMany({
+          where: { categoryId: category.id, isActive: 1 },
+          orderBy: { orderIndex: 'asc' },
+          select: {
+            slug: true,
+            question: true,
+            answer: true
+          }
+        })
       }
 
       faqData[category.slug] = {
@@ -59,7 +63,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         title: category.title,
         icon: category.icon,
         subtitle: category.subtitle,
-        qandA: questions.map((q: any) => ({
+        qandA: questions.map(q => ({
           id: q.slug,
           question: q.question,
           answer: q.answer
@@ -72,6 +76,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.error('Error fetching FAQ data:', error)
     res.status(500).json({ message: 'Internal server error' })
   }
-
-  // Note: Don't close the database connection here as it may interfere with the response
 }

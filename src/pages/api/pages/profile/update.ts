@@ -1,8 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
 import jwt from 'jsonwebtoken'
-import Database from 'better-sqlite3'
-
-const db = new Database('agent360.db')
+import { prisma } from 'src/lib/prisma'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'PUT') {
@@ -31,45 +29,67 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Check if username is already taken by another user
-    const existingUserStmt = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?')
-    const existingUser = existingUserStmt.get(username, decoded.id) as any
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        username,
+        id: { not: decoded.id }
+      }
+    })
 
     if (existingUser) {
       return res.status(400).json({ message: 'Username is already taken' })
     }
 
     // Update user profile
-    const updateStmt = db.prepare(`
-      UPDATE users
-      SET full_name = ?, username = ?, location = ?, zone = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `)
-
-    const result = updateStmt.run(fullName, username, location || null, zone || null, decoded.id)
-
-    if (result.changes === 0) {
-      return res.status(404).json({ message: 'User not found' })
-    }
+    await prisma.user.update({
+      where: { id: decoded.id },
+      data: {
+        fullName,
+        username,
+        location: location ?? null,
+        zone: zone ?? null,
+        updatedAt: new Date()
+      }
+    })
 
     // Also update agent data if user is an agent
     if (decoded.role === 'agent' || decoded.role === 'super_agent' || decoded.role === 'franchise') {
-      const agentUpdateStmt = db.prepare(`
-        UPDATE agents
-        SET name = ?, zone = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE account_number IN (SELECT account_number FROM agents WHERE name = ? OR account_number = ?)
-      `)
-      agentUpdateStmt.run(fullName, zone || null, fullName, username)
+      await prisma.agent.updateMany({
+        where: {
+          OR: [{ name: fullName }, { accountNumber: username }]
+        },
+        data: {
+          name: fullName,
+          zone: zone ?? null,
+          updatedAt: new Date()
+        }
+      })
     }
 
     // Get updated user data
-    const userStmt = db.prepare(`
-      SELECT id, email, full_name, username, role, permissions, location, zone, is_active, created_at, updated_at
-      FROM users
-      WHERE id = ?
-    `)
-    const updatedUser = userStmt.get(decoded.id) as any
+    const updatedUser = await prisma.user.findUnique({
+      where: { id: decoded.id },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        username: true,
+        role: true,
+        permissions: true,
+        location: true,
+        zone: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true
+      }
+    })
 
-    // Remove sensitive data
+    if (!updatedUser) {
+      return res.status(404).json({ message: 'User not found' })
+    }
+
+    // Remove sensitive data (though permissions might be needed, but following original)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { permissions: _permissions, ...userResponse } = updatedUser
 
     return res.status(200).json({
@@ -84,7 +104,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     return res.status(500).json({ message: 'Internal server error' })
-  } finally {
-    db.close()
   }
 }

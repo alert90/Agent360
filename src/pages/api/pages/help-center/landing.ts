@@ -1,7 +1,43 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 
-const db = new Database('agent360.db')
+interface Article {
+  id: number
+  slug: string
+  title: string
+  orderIndex: number
+}
+
+interface Subcategory {
+  id: number
+  slug: string
+  title: string
+  icon: string | null
+  articles: Article[]
+}
+
+interface Category {
+  id: number
+  slug: string
+  title: string
+  icon: string | null
+  avatarColor: string | null
+  subCategories: Subcategory[]
+}
+
+interface PopularArticle {
+  slug: string
+  title: string
+  img: string
+  subtitle: string
+}
+
+interface KeepLearningArticle {
+  slug: string
+  title: string
+  img: string
+  subtitle: string
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -10,95 +46,82 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // Fetch categories with subcategories and articles
-    const categoriesStmt = db.prepare(`
-      SELECT
-        c.id, c.slug, c.title, c.icon, c.avatar_color, c.order_index,
-        sc.id as subcategory_id, sc.slug as subcategory_slug, sc.title as subcategory_title,
-        sc.icon as subcategory_icon, sc.order_index as subcategory_order_index,
-        a.id as article_id, a.slug as article_slug, a.title as article_title, a.order_index as article_order_index
-      FROM help_center_categories c
-      LEFT JOIN help_center_subcategories sc ON c.id = sc.category_id AND sc.is_active = 1
-      LEFT JOIN help_center_articles a ON sc.id = a.subcategory_id AND a.is_active = 1
-      WHERE c.is_active = 1
-      ORDER BY c.order_index, sc.order_index, a.order_index
-    `)
-
-    const rows = categoriesStmt.all() as any[]
+    const categories = await prisma.helpCenterCategory.findMany({
+      where: { isActive: 1 },
+      orderBy: { orderIndex: 'asc' },
+      include: {
+        subcategories: {
+          where: { isActive: 1 },
+          orderBy: { orderIndex: 'asc' },
+          include: {
+            articles: {
+              where: { isActive: 1 },
+              orderBy: { orderIndex: 'asc' },
+              select: { id: true, slug: true, title: true, orderIndex: true }
+            }
+          },
+          select: { id: true, slug: true, title: true, icon: true, orderIndex: true }
+        }
+      }
+    })
 
     // Process the data into the expected structure
-    const categoriesMap = new Map()
-    const allArticles: any[] = []
+    const allArticles: Article[] = []
+    const processedCategories: Category[] = categories.map(cat => {
+      const subCategories = cat.subcategories.map(sub => {
+        const articles = sub.articles.map(art => {
+          const article: Article = {
+            id: art.id,
+            slug: art.slug,
+            title: art.title,
+            orderIndex: art.orderIndex ?? 0
+          }
+          allArticles.push(article)
 
-    for (const row of rows) {
-      if (!categoriesMap.has(row.id)) {
-        categoriesMap.set(row.id, {
-          id: row.id,
-          slug: row.slug,
-          title: row.title,
-          icon: row.icon,
-          avatarColor: row.avatar_color,
-          subCategories: []
+          return article
         })
-      }
 
-      const category = categoriesMap.get(row.id)
-
-      // Add subcategory if it doesn't exist
-      let subcategory = category.subCategories.find((sc: any) => sc.id === row.subcategory_id)
-      if (!subcategory && row.subcategory_id) {
-        subcategory = {
-          id: row.subcategory_id,
-          slug: row.subcategory_slug,
-          title: row.subcategory_title,
-          icon: row.subcategory_icon,
-          articles: []
+        return {
+          id: sub.id,
+          slug: sub.slug,
+          title: sub.title,
+          icon: sub.icon,
+          articles
         }
-        category.subCategories.push(subcategory)
-      }
+      })
 
-      // Add article if it exists
-      if (row.article_id && subcategory) {
-        const article = {
-          id: row.article_id,
-          slug: row.article_slug,
-          title: row.article_title,
-          orderIndex: row.article_order_index
-        }
-        subcategory.articles.push(article)
-        allArticles.push(article)
+      return {
+        id: cat.id,
+        slug: cat.slug,
+        title: cat.title,
+        icon: cat.icon ?? null,
+        avatarColor: cat.avatarColor ?? null,
+        subCategories
       }
-    }
-
-    const categories = Array.from(categoriesMap.values())
+    })
 
     // Fetch popular articles
-    const popularArticlesStmt = db.prepare(`
-      SELECT slug, title, img, subtitle
-      FROM popular_articles
-      WHERE is_active = 1
-      ORDER BY order_index
-    `)
-    const popularArticles = popularArticlesStmt.all() as any[]
+    const popularArticles: PopularArticle[] = await prisma.popularArticle.findMany({
+      where: { isActive: 1 },
+      orderBy: { orderIndex: 'asc' },
+      select: { slug: true, title: true, img: true, subtitle: true }
+    })
 
     // Fetch keep learning articles
-    const keepLearningStmt = db.prepare(`
-      SELECT slug, title, img, subtitle
-      FROM keep_learning_articles
-      WHERE is_active = 1
-      ORDER BY order_index
-    `)
-    const keepLearning = keepLearningStmt.all() as any[]
+    const keepLearning: KeepLearningArticle[] = await prisma.keepLearningArticle.findMany({
+      where: { isActive: 1 },
+      orderBy: { orderIndex: 'asc' },
+      select: { slug: true, title: true, img: true, subtitle: true }
+    })
 
     res.status(200).json({
       allArticles,
-      categories,
+      categories: processedCategories,
       popularArticles,
       keepLearning
     })
   } catch (error) {
     console.error('Error fetching help center data:', error)
     res.status(500).json({ message: 'Internal server error' })
-  } finally {
-    db.close()
   }
 }

@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'PUT') {
@@ -12,34 +12,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ message: 'Agent ID is required' })
   }
 
-  const db = new Database('agent360.db')
+  const agentId = parseInt(id as string)
 
   try {
     if (req.method === 'GET') {
-      const agent = db
-        .prepare(
-          `
-        SELECT
-        id,
-        name,
-        account_number,
-        type,
-        is_active,
-        parent_agent_id,
-        email,
-        phone,
-        contact as address,
-        branch_code,
-        branch_name,
-        region,
-        zone,
-        created_at,
-        updated_at
-      FROM agents
-      WHERE id = ?
-    `
-        )
-        .get(id as string)
+      const agent = await prisma.agent.findUnique({
+        where: { id: agentId }
+      })
 
       if (!agent) {
         return res.status(404).json({
@@ -53,10 +32,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         data: agent
       })
     } else if (req.method === 'PUT') {
-      const { name, account_number, type, is_active, email, phone, contact, branch_code, branch_name, region, zone } =
+      const { name, accountNumber, type, isActive, email, phone, contact, branchCode, branchName, region, zone } =
         req.body
 
-      console.log('Agent update request:', { id, name, account_number, type, is_active })
+      console.log('Agent update request:', { id, name, accountNumber, type, isActive })
 
       // Validate required fields
       if (!name || name.trim() === '') {
@@ -66,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })
       }
 
-      if (!account_number || account_number.trim() === '') {
+      if (!accountNumber || accountNumber.trim() === '') {
         return res.status(400).json({
           success: false,
           message: 'Account number is required and cannot be empty'
@@ -82,7 +61,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       // Check if agent exists
-      const existingAgent = db.prepare('SELECT id FROM agents WHERE id = ?').get(id as string)
+      const existingAgent = await prisma.agent.findUnique({
+        where: { id: agentId }
+      })
+
       if (!existingAgent) {
         return res.status(404).json({
           success: false,
@@ -91,90 +73,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       // Update agent
-      const updateStmt = db.prepare(`
-        UPDATE agents SET
-          name = ?,
-          account_number = ?,
-          type = ?,
-          is_active = ?,
-          email = ?,
-          phone = ?,
-          contact = ?,
-          branch_code = ?,
-          branch_name = ?,
-          region = ?,
-          zone = ?,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `)
-
-      const result = updateStmt.run(
-        name,
-        account_number,
-        type,
-        is_active ? 1 : 0,
-        email || null,
-        phone || null,
-        contact || null,
-        branch_code || null,
-        branch_name || null,
-        region || null,
-        zone || null,
-        id as string
-      )
-
-      if (result.changes > 0) {
-        // Auto-populate branch data if missing
-        if (!branch_code || !branch_name) {
-          const branchDataStmt = db
-            .prepare(
-              `
-            SELECT branch_code, location as branch_name
-            FROM transactions
-            WHERE agent_id = ?
-            ORDER BY created_at DESC
-            LIMIT 1
-          `
-            )
-            .get(id as string) as any
-
-          if (branchDataStmt && (branchDataStmt.branch_code || branchDataStmt.branch_name)) {
-            const updateBranchStmt = db.prepare(`
-              UPDATE agents SET
-                branch_code = COALESCE(branch_code, ?),
-                branch_name = COALESCE(branch_name, ?),
-                updated_at = CURRENT_TIMESTAMP
-              WHERE id = ?
-            `)
-            updateBranchStmt.run(branchDataStmt.branch_code, branchDataStmt.branch_name, id as string)
-            console.log(`Auto-populated branch data for agent ${id}`)
-          }
+      const updatedAgent = await prisma.agent.update({
+        where: { id: agentId },
+        data: {
+          name,
+          accountNumber,
+          type,
+          isActive: isActive ? 1 : 0,
+          email,
+          phone,
+          contact,
+          branchCode,
+          branchName,
+          region,
+          zone,
+          updatedAt: new Date()
         }
+      })
 
-        res.status(200).json({
-          success: true,
-          message: 'Agent updated successfully',
-          data: {
-            id: id as string,
-            name,
-            account_number,
-            type,
-            is_active,
-            email,
-            phone,
-            contact,
-            branch_code,
-            branch_name,
-            region,
-            zone
-          }
+      // Auto-populate branch data if missing
+      if (!branchCode || !branchName) {
+        const branchData = await prisma.transaction.findFirst({
+          where: { agentId: agentId },
+          orderBy: { createdAt: 'desc' },
+          select: { location: true }
         })
-      } else {
-        res.status(400).json({
-          success: false,
-          message: 'No changes made to agent'
-        })
+
+        if (branchData && branchData.location) {
+          await prisma.agent.update({
+            where: { id: agentId },
+            data: {
+              branchCode: branchCode || existingAgent.branchCode,
+              branchName: branchName || branchData.location,
+              updatedAt: new Date()
+            }
+          })
+          console.log(`Auto-populated branch data for agent ${id}`)
+        }
       }
+
+      res.status(200).json({
+        success: true,
+        message: 'Agent updated successfully',
+        data: updatedAgent
+      })
     }
   } catch (error) {
     console.error('Error in agent API:', error)
@@ -183,7 +125,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: 'Internal server error',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }
