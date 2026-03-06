@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'DELETE') {
@@ -12,46 +12,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ message: 'Assignment ID is required' })
   }
 
-  const db = new Database('agent360.db')
-
   try {
     // Start transaction
-    const transaction = db.transaction(() => {
-      // Get the assignment to find the local agent
-      const assignment = db
-        .prepare(
-          `
-        SELECT local_agent_id FROM agent_assignments WHERE id = ?
-      `
-        )
-        .get(id as string)
+    const result = await prisma.$transaction(async tx => {
+      // Get the assignment
+      const assignment = await tx.agentAssignment.findUnique({
+        where: { id: parseInt(id as string) }
+      })
 
       if (!assignment) {
         throw new Error('Assignment not found')
       }
 
       // Update assignment status to inactive
-      const updateAssignment = db.prepare(`
-        UPDATE agent_assignments
-        SET status = 'inactive', updated_at = datetime('now')
-        WHERE id = ?
-      `)
-
-      updateAssignment.run(id)
+      const updatedAssignment = await tx.agentAssignment.update({
+        where: { id: parseInt(id as string) },
+        data: {
+          status: 'inactive',
+          updatedAt: new Date().toISOString()
+        }
+      })
 
       // Remove parent_agent_id from the agent
-      const updateAgent = db.prepare(`
-        UPDATE agents
-        SET parent_agent_id = NULL, updated_at = datetime('now')
-        WHERE id = ?
-      `)
+      const updatedAgent = await tx.agent.update({
+        where: { id: assignment.localAgentId },
+        data: {
+          parentAgentId: null,
+          updatedAt: new Date()
+        }
+      })
 
-      updateAgent.run((assignment as any).local_agent_id)
-
-      return assignment
+      return { updatedAssignment, updatedAgent }
     })
-
-    const result = transaction()
 
     res.status(200).json({
       success: true,
@@ -59,13 +51,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       data: result
     })
   } catch (error) {
-    console.error('Error unassigning agent:', error)
+    console.error('Error occur when unassign agent:', error)
     res.status(500).json({
       success: false,
       message: 'Failed to unassign agent',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }

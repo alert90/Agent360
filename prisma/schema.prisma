@@ -198,6 +198,7 @@ model AgentAssignment {
   superAgent   Agent?  @relation("SuperAgent", fields: [superAgentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   localAgent   Agent   @relation("LocalAgent", fields: [localAgentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
+  @@unique([localAgentId, superAgentId, franchiseId], name: "local_agent_id_super_agent_id_franchise_id")
   @@index([status], map: "idx_agent_assignments_status")
   @@index([franchiseId], map: "idx_agent_assignments_franchise")
   @@index([superAgentId], map: "idx_agent_assignments_super_agent")

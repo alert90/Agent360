@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -12,11 +12,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ message: 'Agent ID is required' })
   }
 
-  const db = new Database('agent360.db')
+  const agentId = parseInt(id as string)
 
   try {
     // Get the agent details
-    const agent = db.prepare('SELECT * FROM agents WHERE id = ?').get(id) as any
+    const agent = await prisma.agent.findUnique({
+      where: { id: agentId }
+    })
 
     if (!agent) {
       return res.status(404).json({
@@ -26,55 +28,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Determine agent type
-    const isSuperAgentOrFranchise =
-      agent.type === 'super_agent' || agent.type === 'franchise' || agent.type === 'local_agent'
+    const isSuperAgentOrFranchise = agent.type === 'super_agent' || agent.type === 'franchise'
 
     // Threshold: 1 transaction
     const threshold = 1
 
     // Query to find unique agent accounts (starting with 01J7) that this agent has made deposits/transfers to
-    const transactionAgents = db
-      .prepare(
-        `
+    const transactionAgents = await prisma.$queryRaw<any[]>`
       SELECT
         t."customer_account" as account_number,
         COUNT(*) as transaction_count,
         SUM(t.amount) as total_amount,
-        MAX(t.created_at) as last_transaction_date,
-        GROUP_CONCAT(DISTINCT t.type) as transaction_types
-      FROM transactions t
-      WHERE t.agent_id = ?
-        AND t.type IN ('deposit', 'transfer')
-        AND t.customer_account IS NOT NULL
-        AND t.customer_account LIKE '01J7%'
-        AND t.customer_account != ?
-      GROUP BY t.customer_account
-      HAVING COUNT(*) >= ?
+        MAX(t."timestamp") as last_transaction_date,
+        STRING_AGG(DISTINCT t."type", ',') as transaction_types
+      FROM "transactions" t
+      WHERE t."agent_id" = ${agentId}
+        AND t."type" IN ('deposit', 'transfer')
+        AND t."customer_account" IS NOT NULL
+        AND t."customer_account" LIKE '01J7%'
+        AND t."customer_account" != ${agent.accountNumber}
+      GROUP BY t."customer_account"
+      HAVING COUNT(*) >= ${threshold}
       ORDER BY transaction_count DESC, total_amount DESC
     `
-      )
-      .all(id, agent.account_number, threshold) as any[]
 
-    // Get the actual agent details for these account numbers
     const accountNumbers = transactionAgents.map((t: any) => t.account_number)
 
     let agentDetails: any[] = []
 
     if (accountNumbers.length > 0) {
       // Get agent details from the agents table
-      const placeholders = accountNumbers.map(() => '?').join(',')
-      const agentDetailsRows = db
-        .prepare(
-          `
-        SELECT id, name, account_number, type, is_active, parent_agent_id
-        FROM agents
-        WHERE account_number IN (${placeholders})
-      `
-        )
-        .all(...accountNumbers) as any[]
+      const agentDetailsRows = await prisma.agent.findMany({
+        where: {
+          accountNumber: { in: accountNumbers }
+        },
+        select: {
+          id: true,
+          name: true,
+          accountNumber: true,
+          type: true,
+          isActive: true,
+          parentAgentId: true
+        }
+      })
 
       // Create a map for quick lookup
-      const agentMap = new Map(agentDetailsRows.map((a: any) => [a.account_number, a]))
+      const agentMap = new Map(agentDetailsRows.map(a => [a.accountNumber, a]))
 
       // Merge transaction data with agent details
       agentDetails = transactionAgents.map((t: any) => {
@@ -85,14 +84,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           name: agentInfo?.name || t.account_number,
           account_number: t.account_number,
           type: agentInfo?.type || 'unknown',
-          is_active: agentInfo?.is_active === 1,
-          parent_agent_id: agentInfo?.parent_agent_id,
+          is_active: agentInfo?.isActive === 1,
+          parent_agent_id: agentInfo?.parentAgentId,
           transaction_count: Number(t.transaction_count),
           total_amount: Number(t.total_amount),
           last_transaction_date: t.last_transaction_date,
           transaction_types: t.transaction_types,
           is_detected: true,
-          is_assigned: agentInfo?.parent_agent_id === parseInt(id as string)
+          is_assigned: agentInfo?.parentAgentId === agentId
         }
       })
     }
@@ -103,20 +102,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!isSuperAgentOrFranchise && transactionAgents.length > 0) {
       // Check transaction type ratio
-      const typeCounts = db
-        .prepare(
-          `
+      const typeCounts = await prisma.$queryRaw<any[]>`
         SELECT t."type", COUNT(*) as count
         FROM "transactions" t
-        WHERE t."agent_id" = ?
+        WHERE t."agent_id" = ${agentId}
           AND t."type" IN ('deposit', 'transfer')
           AND t."customer_account" IS NOT NULL
           AND t."customer_account" LIKE '01J7%'
-          AND t."customer_account" != ?
+          AND t."customer_account" != ${agent.accountNumber}
         GROUP BY t."type"
       `
-        )
-        .all(id, agent.account_number) as any[]
 
       let depositCount = 0
       let transferCount = 0
@@ -126,10 +121,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (row.type === 'transfer') transferCount = Number(row.count)
       })
 
-      // Super agent: transacts mainly with agents (01J7 accounts)
-      // Franchise: transacts with both agents and customers
-      // If more deposits than transfers, it's more likely a franchise (deposits = customer interactions)
-      // If more transfers than deposits, it's more likely a super_agent
       if (depositCount > transferCount) {
         detectedType = 'franchise'
       } else {
@@ -162,7 +153,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: 'Failed to fetch transaction agents',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }

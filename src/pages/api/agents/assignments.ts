@@ -1,40 +1,48 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ message: 'Method not allowed' })
   }
 
-  const db = new Database('agent360.db')
-
   try {
-    const assignments = db
-      .prepare(
-        `
-      SELECT
-        aa.*,
-        la.name as local_agent_name,
-        la.account_number as local_agent_account_number,
-        sa.name as super_agent_name,
-        sa.account_number as super_agent_account_number,
-        f.name as franchise_name,
-        f.account_number as franchise_account_number,
-        u.name as assigned_by_name
-      FROM agent_assignments aa
-      LEFT JOIN agents la ON aa.local_agent_id = la.id
-      LEFT JOIN agents sa ON aa.super_agent_id = sa.id
-      LEFT JOIN agents f ON aa.franchise_id = f.id
-      LEFT JOIN users u ON aa.assigned_by = u.id
-      WHERE aa.status = 'active'
-      ORDER BY aa.assigned_at DESC
-    `
-      )
-      .all()
+    const assignments = await prisma.agentAssignment.findMany({
+      where: { status: 'active' },
+      include: {
+        localAgent: {
+          select: { name: true, accountNumber: true }
+        },
+        superAgent: {
+          select: { name: true, accountNumber: true }
+        },
+        franchise: {
+          select: { name: true, accountNumber: true }
+        }
+      },
+      orderBy: { assignedAt: 'desc' }
+    })
+
+    // Transform to match frontend expectations
+    const transformedAssignments = assignments.map(a => ({
+      id: a.id,
+      local_agent_id: a.localAgentId,
+      local_agent_name: a.localAgent?.name,
+      local_agent_account_number: a.localAgent?.accountNumber,
+      super_agent_id: a.superAgentId,
+      super_agent_name: a.superAgent?.name,
+      super_agent_account_number: a.superAgent?.accountNumber,
+      franchise_id: a.franchiseId,
+      franchise_name: a.franchise?.name,
+      franchise_account_number: a.franchise?.accountNumber,
+      assigned_at: a.assignedAt,
+      assigned_by: a.assignedBy,
+      status: a.status
+    }))
 
     res.status(200).json({
       success: true,
-      data: assignments
+      data: transformedAssignments
     })
   } catch (error) {
     console.error('Error fetching assignments:', error)
@@ -43,7 +51,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: 'Failed to fetch assignments',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }
