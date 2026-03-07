@@ -1,8 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 import jwt from 'jsonwebtoken'
-
-const db = new Database('agent360.db')
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -10,7 +8,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Get user from JWT token (same as auth/verify)
+    // Get user from JWT token
     const authHeader = req.headers.authorization
     const token = authHeader?.replace('Bearer ', '') || req.cookies?.token
 
@@ -22,62 +20,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const decoded = jwt.verify(token, process.env.NEXT_PUBLIC_JWT_SECRET!) as { id: number }
 
     // Get authenticated user by ID
-    const userStmt = db.prepare(`
-      SELECT id, email, full_name, username, role, location, zone, phone_number, address, zip_code, avatar, is_active, created_at, updated_at
-      FROM users
-      WHERE id = ? AND is_active = 1
-    `)
-
-    const user = userStmt.get(decoded.id) as any
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.id }
+    })
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' })
     }
 
     // Get user's accounts (agents they manage)
-    const accountsStmt = db.prepare(`
-      SELECT id, account_number, name, type, branch_name, total_transaction_amount, transaction_count, commission_amount
-      FROM agents
-      WHERE is_active = 1
-      ORDER BY created_at DESC
-    `)
+    const accounts = await prisma.agent.findMany({
+      where: { isActive: 1 },
+      orderBy: { createdAt: 'desc' },
+      take: 10
+    })
 
-    const accounts = accountsStmt.all() as any[]
+    // Get recent transactions (limited to 5)
+    const transactions = await prisma.transaction.findMany({
+      orderBy: { timestamp: 'desc' },
+      take: 5
+    })
 
-    // Get recent activity (limited to 10 items for performance)
-    const activityStmt = db.prepare(`
-      SELECT
-        'transaction' as type,
-        t.id,
-        t.transaction_id as reference,
-        'Transaction ' || t.type || ' of ' || printf('%.2f', t.amount) as description,
-        t.timestamp as created_at,
-        t.status
-      FROM transactions t
-      ORDER BY t.timestamp DESC
-      LIMIT 5
-    `)
+    // Get login activity
+    const loginSessions = await prisma.userLoginSession.findMany({
+      where: { userId: user.id },
+      orderBy: { lastActivity: 'desc' },
+      take: 5
+    })
 
-    const transactions = activityStmt.all() as any[]
+    const loginActivity = loginSessions.map(session => ({
+      type: 'login',
+      id: session.id,
+      reference: session.sessionId,
+      description: `Successful login from ${session.browser || 'Unknown'} on ${session.os || 'Unknown'}`,
+      created_at: session.createdAt,
+      status: 'success'
+    }))
 
-    // Get login activity (limited)
-    const loginActivity = [
-      {
-        type: 'login',
-        id: 1,
-        reference: 'login_001',
-        description: 'Successful login from Chrome on Windows',
-        created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-        status: 'success'
-      }
+    // Combine activities
+    const allActivity = [
+      ...transactions.map(t => ({
+        type: 'transaction',
+        id: t.id,
+        reference: t.transactionId,
+        description: `Transaction ${t.type} of TZS ${t.amount.toLocaleString()}`,
+        created_at: t.timestamp,
+        status: t.status
+      })),
+      ...loginActivity
     ]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 10)
 
-    // Combine limited activity
-    const allActivity = [...transactions.map(t => ({ ...t, type: 'transaction' })), ...loginActivity].sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    )
-
-    // Get user's notifications (mock data for now)
+    // Mock notifications for now
     const notifications = [
       {
         id: 1,
@@ -85,60 +80,56 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         message: 'Your account has been successfully set up. You can now access all features.',
         isRead: false,
         actionUrl: '/pages/user-profile',
-        createdAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() // 1 hour ago
+        createdAt: new Date(Date.now() - 60 * 60 * 1000).toISOString()
       },
       {
         id: 2,
         title: 'Commission Report Available',
-        message: 'Your monthly commission report for December 2025 is now available.',
+        message: 'Your monthly commission report for January 2026 is now available.',
         isRead: true,
         actionUrl: '/pages/commission',
-        createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString() // 2 days ago
-      },
-      {
-        id: 3,
-        title: 'Security Alert',
-        message: 'New login detected from an unrecognized device.',
-        isRead: false,
-        actionUrl: '/pages/account-settings/security',
-        createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() // 3 days ago
+        createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
       }
     ]
 
-    // Get user's login sessions (real device data)
-    const sessionsStmt = db.prepare(`
-      SELECT
-        id,
-        ip_address as ipAddress,
-        location,
-        browser,
-        os,
-        device_type as deviceType,
-        device_name as deviceName,
-        last_activity as lastActivity,
-        is_active as isActive
-      FROM user_login_sessions
-      WHERE user_id = ?
-      ORDER BY last_activity DESC
-      LIMIT 10
-    `)
+    // Get device sessions
+    const deviceSessions = await prisma.userLoginSession.findMany({
+      where: { userId: user.id },
+      orderBy: { lastActivity: 'desc' },
+      take: 10
+    })
 
-    const deviceSessions = sessionsStmt.all(user.id) as any[]
-
-    // Get security settings
     const securitySettings = {
       twoFactorEnabled: false,
-      lastPasswordChange: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+      lastPasswordChange: user.updatedAt,
       loginAlerts: true,
-      trustedDevices: deviceSessions.filter(s => s.isActive).length,
+      trustedDevices: deviceSessions.filter(s => s.isActive === 1).length,
       recentDevices: deviceSessions
     }
 
+    // Transform user data
+    const userData = {
+      id: user.id,
+      email: user.email,
+      full_name: user.fullName,
+      username: user.username,
+      role: user.role,
+      location: user.location,
+      zone: user.zone,
+      phone_number: user.phoneNumber,
+      address: user.address,
+      zip_code: user.zipCode,
+      avatar: user.avatar,
+      is_active: user.isActive,
+      created_at: user.createdAt,
+      updated_at: user.updatedAt
+    }
+
     res.status(200).json({
-      user,
-      accounts: accounts.slice(0, 10), // Limit accounts
-      activity: allActivity.slice(0, 10), // Limit to 10 most recent activities
-      notifications: notifications.slice(0, 5), // Limit notifications
+      user: userData,
+      accounts,
+      activity: allActivity,
+      notifications,
       securitySettings
     })
   } catch (error) {

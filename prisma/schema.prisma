@@ -7,68 +7,75 @@ datasource db {
 }
 
 model User {
-  id                                                              Int                        @id @default(autoincrement())
-  email                                                           String                     @unique
-  password                                                        String
-  fullName                                                        String                     @map("full_name")
-  username                                                        String                     @unique
-  role                                                            String
-  permissions                                                     String?
-  location                                                        String?
-  zone                                                            String?
-  isActive                                                        Boolean?                  @default(true) @map("is_active")
-  createdAt                                                       DateTime?                 @default(now()) @map("created_at")
-  updatedAt                                                       DateTime?                 @default(now()) @map("updated_at")
-  phoneNumber                                                     String?                   @map("phone_number")
-  address                                                         String?
-  zipCode                                                         String?                   @map("zip_code")
-  avatar                                                          String?
-  agent_suspensions_agent_suspensions_approved_by_user_idTousers  agent_suspensions[]        @relation("agent_suspensions_approved_by_user_idTousers")
-  agent_suspensions_agent_suspensions_suspended_by_user_idTousers agent_suspensions[]        @relation("agent_suspensions_suspended_by_user_idTousers")
-  commissionUserAssignments                                       CommissionUserAssignment[]
-  regionalManagerAssignments                                      RegionalManagerAssignment[]
-  user_login_sessions                                             user_login_sessions[]
-  userNotifications                                               UserNotification[]
+  id          Int       @id @default(autoincrement())
+  email       String    @unique
+  password    String
+  fullName    String    @map("full_name")
+  username    String    @unique
+  role        String
+  permissions String?
+  location    String?
+  zone        String?
+  isActive    Boolean?  @default(true) @map("is_active")
+  phoneNumber String?   @map("phone_number")
+  address     String?
+  zipCode     String?   @map("zip_code")
+  avatar      String?
+  createdAt   DateTime? @default(now()) @map("created_at")
+  updatedAt   DateTime? @default(now()) @map("updated_at")
+
+  // Relations
+  commissionUserAssignments  CommissionUserAssignment[]
+  agentSuspensionsSuspended  AgentSuspension[]           @relation("suspended_by")
+  agentSuspensionsApproved   AgentSuspension[]           @relation("approved_by")
+  userLoginSessions          UserLoginSession[]
+  userNotifications          UserNotification[]
+  regionalManagerAssignments RegionalManagerAssignment[]
 
   @@map("users")
 }
 
 model Agent {
-  id                          Int                        @id @default(autoincrement())
-  accountNumber               String                     @unique(map: "sqlite_autoindex_agents_1") @map("account_number")
-  name                        String
-  type                        String
-  branchCode                  String                     @map("branch_code")
-  branchName                  String                     @map("branch_name")
-  parentAgentId               Int?                       @map("parent_agent_id")
-  isActive                    Int?                       @default(1) @map("is_active")
-  commissionEligible          Int?                       @default(1) @map("commission_eligible")
-  totalTransactionAmount      Float?                     @default(0) @map("total_transaction_amount")
-  transactionCount            Int?                       @default(0) @map("transaction_count")
-  commissionAmount            Float?                     @default(0) @map("commission_amount")
-  payband                     Float?                     @default(1.0)
-  createdAt                   DateTime?                  @default(now()) @map("created_at")
-  updatedAt                   DateTime?                  @default(now()) @map("updated_at")
-  username                    String?
-  email                       String?
-  phone                       String?
-  contact                     String?
-  role                        String?
-  region                      String?
-  zone                        String?
-  agentAssignmentsAsFranchise AgentAssignment[]          @relation("Franchise")
-  agentAssignmentsAsSuper     AgentAssignment[]          @relation("SuperAgent")
-  agentAssignments            AgentAssignment[]          @relation("LocalAgent")
+  id                     Int       @id @default(autoincrement())
+  accountNumber          String    @unique @map("account_number")
+  name                   String
+  type                   String
+  branchCode             String    @map("branch_code")
+  branchName             String    @map("branch_name")
+  parentAgentId          Int?      @map("parent_agent_id")
+  isActive               Int?      @default(1) @map("is_active")
+  commissionEligible     Int?      @default(1) @map("commission_eligible")
+  totalTransactionAmount Float?    @default(0) @map("total_transaction_amount")
+  transactionCount       Int?      @default(0) @map("transaction_count")
+  commissionAmount       Float?    @default(0) @map("commission_amount")
+  payband                Float?    @default(1.0)
+  username               String?
+  email                  String?
+  phone                  String?
+  contact                String?
+  role                   String?
+  region                 String?
+  zone                   String?
+  createdAt              DateTime? @default(now()) @map("created_at")
+  updatedAt              DateTime? @default(now()) @map("updated_at")
+
+  // Relations
+  parentAgent                 Agent?                      @relation("AgentHierarchy", fields: [parentAgentId], references: [id])
+  childAgents                 Agent[]                     @relation("AgentHierarchy")
+  agentAssignmentsAsLocal     AgentAssignment[]           @relation("LocalAgent")
+  agentAssignmentsAsSuper     AgentAssignment[]           @relation("SuperAgent")
+  agentAssignmentsAsFranchise AgentAssignment[]           @relation("Franchise")
+  transactions                Transaction[]
+  commissions                 Commission[]
+  agentSuspensions            AgentSuspension[]
   regionalManagerAssignments  RegionalManagerAssignment[]
-  agent_suspensions           agent_suspensions[]
-  commissions                 commissions[]
 
   @@map("agents")
 }
 
 model Transaction {
   id                 Int       @id @default(autoincrement())
-  transactionId      String    @unique(map: "sqlite_autoindex_transactions_1") @map("transaction_id")
+  transactionId      String    @unique @map("transaction_id")
   agentId            Int?      @map("agent_id")
   agentName          String    @map("agent_name")
   customerName       String    @map("customer_name")
@@ -90,142 +97,207 @@ model Transaction {
   timestamp          DateTime? @default(now())
   createdAt          DateTime? @default(now()) @map("created_at")
 
+  // Relations
+  agent Agent? @relation(fields: [agentId], references: [id])
+
   @@map("transactions")
 }
 
-model CommissionCalculation {
-  id               Int       @id @default(autoincrement())
-  agentId          String    @map("agent_id")
-  agentName        String    @map("agent_name")
-  agentType        String    @map("agent_type")
-  period           String
-  totalAmount      Float?    @default(0) @map("total_amount")
-  transactionCount Int?      @default(0) @map("transaction_count")
-  eligibleAmount   Float?    @default(0) @map("eligible_amount")
-  commissionRate   Float?    @default(0) @map("commission_rate")
-  commissionAmount Float?    @default(0) @map("commission_amount")
-  payband          Float?    @default(1.0)
-  finalCommission  Float?    @default(0) @map("final_commission")
-  createdAt        DateTime? @default(now()) @map("created_at")
-  updatedAt        DateTime? @default(now()) @map("updated_at")
-
-  @@unique([agentId, period], map: "sqlite_autoindex_commission_calculations_1")
-  @@map("commission_calculations")
-}
-
-model SuperAgentKPI {
-  id                    Int       @id @default(autoincrement())
-  superAgentId          Int?      @map("super_agent_id")
-  period                String
-  activenessWeight      Float     @map("activeness_weight")
-  valueTransactedWeight Float     @map("value_transacted_weight")
-  uniqueAgentsWeight    Float     @map("unique_agents_weight")
-  activenessScore       Float     @map("activeness_score")
-  valueTransactedScore  Float     @map("value_transacted_score")
-  uniqueAgentsScore     Float     @map("unique_agents_score")
-  totalScore            Float     @map("total_score")
-  createdAt             DateTime? @default(now()) @map("created_at")
-
-  @@map("super_agent_kpis")
-}
-
-model FranchiseCalculation {
-  id                   Int       @id @default(autoincrement())
-  franchiseId          Int?      @map("franchise_id")
-  period               String
-  agentToCustomerValue Float     @map("agent_to_customer_value")
-  expectedTurnover     Float     @map("expected_turnover")
-  actualTurnover       Float     @map("actual_turnover")
-  payband              Float
-  commissionRate       Float     @map("commission_rate")
-  commissionAmount     Float     @map("commission_amount")
-  clawbackAmount       Float?    @default(0) @map("clawback_amount")
-  finalCommission      Float     @map("final_commission")
-  createdAt            DateTime? @default(now()) @map("created_at")
-
-  @@map("franchise_calculations")
-}
-
 model CommissionConfig {
-  id                        Int                        @id @default(autoincrement())
-  title                     String
-  code                      String                     @unique(map: "sqlite_autoindex_commission_configs_1")
-  description               String?
-  type                      String
-  value                     Float
-  agentType                 String                     @map("agent_type")
-  status                    String                     @default("active")
-  startDate                 String?                    @map("start_date")
-  endDate                   String?                    @map("end_date")
-  minTransactionAmount      Float?                     @default(100000) @map("min_transaction_amount")
-  commissionRate            Float?                     @default(0.05) @map("commission_rate")
-  paybandFee                Float?                     @default(0) @map("payband_fee")
-  superAgentCommissionRate  Float?                     @default(0.2) @map("super_agent_commission_rate")
-  superAgentFixedRate       Float?                     @default(0.06) @map("super_agent_fixed_rate")
-  superAgentVariableRate    Float?                     @default(0.14) @map("super_agent_variable_rate")
-  franchiseMultiplier       Float?                     @default(4.5) @map("franchise_multiplier")
-  kpiWeights                String?                    @map("kpi_weights")
-  isActive                  Int?                       @default(1) @map("is_active")
-  createdAt                 String?                    @default("CURRENT_TIMESTAMP") @map("created_at")
-  updatedAt                 String?                    @default("CURRENT_TIMESTAMP") @map("updated_at")
+  id          Int     @id @default(autoincrement())
+  title       String
+  code        String  @unique
+  description String?
+  type        String  @default("percentage")
+  value       Float
+  agentType   String  @default("all") @map("agent_type")
+  status      String  @default("active")
+
+  // Local Agent Settings
+  minTransactionAmount Float? @default(100000) @map("min_transaction_amount")
+  commissionRate       Float? @default(0.05) @map("commission_rate")
+
+  // Super Agent Settings
+  superAgentCommissionRate Float? @default(0.2) @map("super_agent_commission_rate")
+  superAgentFixedRate      Float? @default(0.3) @map("super_agent_fixed_rate")
+  superAgentVariableRate   Float? @default(0.7) @map("super_agent_variable_rate")
+
+  // KPI Weights
+  kpiWeights String? @map("kpi_weights")
+
+  // Franchise Settings
+  franchiseMultiplier Float? @default(4.5) @map("franchise_multiplier")
+  franchiseBaseRate   Float? @default(0.0005) @map("franchise_base_rate")
+
+  // Payband Configuration
+  paybandRates String? @map("payband_rates")
+
+  // Common
+  isActive  Int?      @default(1) @map("is_active")
+  createdAt DateTime? @default(now()) @map("created_at")
+  updatedAt DateTime? @default(now()) @map("updated_at")
+
+  // Relations
   commissionUserAssignments CommissionUserAssignment[]
 
   @@map("commission_configs")
 }
 
+model Commission {
+  id        Int    @id @default(autoincrement())
+  agentId   Int    @map("agent_id")
+  agentName String @map("agent_name")
+  agentType String @map("agent_type")
+  period    String
+
+  // Transaction Summary
+  transactionCount Int   @default(0) @map("transaction_count")
+  totalAmount      Float @default(0) @map("total_amount")
+
+  // Commission Details
+  eligibleAmount   Float @default(0) @map("eligible_amount")
+  commissionRate   Float @default(0) @map("commission_rate")
+  commissionAmount Float @default(0) @map("commission_amount")
+  payband          Float @default(0)
+  finalCommission  Float @default(0) @map("final_commission")
+
+  // KPI Scores
+  kpiActivenessScore   Float? @map("kpi_activeness_score")
+  kpiValueScore        Float? @map("kpi_value_score")
+  kpiUniqueAgentsScore Float? @map("kpi_unique_agents_score")
+  kpiTotalScore        Float? @map("kpi_total_score")
+
+  // Franchise Details
+  capitalAdvanced  Float? @map("capital_advanced")
+  expectedTurnover Float? @map("expected_turnover")
+  actualTurnover   Float? @map("actual_turnover")
+  performanceRatio Float? @map("performance_ratio")
+  clawbackAmount   Float? @default(0) @map("clawback_amount")
+
+  // Metadata
+  calculationDetails String?   @map("calculation_details")
+  status             String?   @default("calculated")
+  createdAt          DateTime? @default(now()) @map("created_at")
+  updatedAt          DateTime? @default(now()) @map("updated_at")
+
+  // Relations
+  agent Agent @relation(fields: [agentId], references: [id])
+
+  @@unique([agentId, period])
+  @@map("commissions")
+}
+
+model AgentAssignment {
+  id           Int       @id @default(autoincrement())
+  localAgentId Int       @map("local_agent_id")
+  superAgentId Int?      @map("super_agent_id")
+  franchiseId  Int?      @map("franchise_id")
+  status       String    @default("active")
+  assignedAt   DateTime? @default(now()) @map("assigned_at")
+  assignedBy   String    @default("admin") @map("assigned_by")
+  updatedAt    DateTime? @default(now()) @map("updated_at")
+
+  // Relations
+  localAgent Agent  @relation("LocalAgent", fields: [localAgentId], references: [id])
+  superAgent Agent? @relation("SuperAgent", fields: [superAgentId], references: [id])
+  franchise  Agent? @relation("Franchise", fields: [franchiseId], references: [id])
+
+  @@unique([localAgentId, superAgentId, franchiseId])
+  @@index([status])
+  @@map("agent_assignments")
+}
+
+model AgentSuspension {
+  id                Int       @id @default(autoincrement())
+  agentId           Int       @map("agent_id")
+  suspendedByUserId Int       @map("suspended_by_user_id")
+  reason            String
+  status            String    @default("pending")
+  createdAt         DateTime? @default(now()) @map("created_at")
+  approvedAt        DateTime? @map("approved_at")
+  approvedByUserId  Int?      @map("approved_by_user_id")
+
+  // Relations
+  agent       Agent @relation(fields: [agentId], references: [id])
+  suspendedBy User  @relation("suspended_by", fields: [suspendedByUserId], references: [id])
+  approvedBy  User? @relation("approved_by", fields: [approvedByUserId], references: [id])
+
+  @@map("agent_suspensions")
+}
+
 model CommissionUserAssignment {
-  id                 Int              @id @default(autoincrement())
-  commissionConfigId Int              @map("commission_config_id")
-  userId             Int              @map("user_id")
-  createdAt          String?          @default("CURRENT_TIMESTAMP") @map("created_at")
-  updatedAt          String?          @default("CURRENT_TIMESTAMP") @map("updated_at")
-  user               User             @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  commissionConfig   CommissionConfig @relation(fields: [commissionConfigId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                 Int       @id @default(autoincrement())
+  commissionConfigId Int       @map("commission_config_id")
+  userId             Int       @map("user_id")
+  createdAt          DateTime? @default(now()) @map("created_at")
+  updatedAt          DateTime? @default(now()) @map("updated_at")
+
+  // Relations
+  commissionConfig CommissionConfig @relation(fields: [commissionConfigId], references: [id])
+  user             User             @relation(fields: [userId], references: [id])
 
   @@map("commission_user_assignments")
 }
 
-model AgentAssignment {
-  id           Int     @id @default(autoincrement())
-  localAgentId Int     @map("local_agent_id")
-  superAgentId Int?    @map("super_agent_id")
-  franchiseId  Int?    @map("franchise_id")
-  status       String  @default("active")
-  assignedAt   String? @default("CURRENT_TIMESTAMP") @map("assigned_at")
-  assignedBy   String  @default("admin") @map("assigned_by")
-  updatedAt    String? @default("CURRENT_TIMESTAMP") @map("updated_at")
-  franchise    Agent?  @relation("Franchise", fields: [franchiseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  superAgent   Agent?  @relation("SuperAgent", fields: [superAgentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  localAgent   Agent   @relation("LocalAgent", fields: [localAgentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+model UserLoginSession {
+  id           Int       @id @default(autoincrement())
+  userId       Int       @map("user_id")
+  sessionId    String    @map("session_id")
+  ipAddress    String    @map("ip_address")
+  userAgent    String?   @map("user_agent")
+  location     String?
+  browser      String?
+  os           String?
+  deviceType   String?   @map("device_type")
+  deviceName   String?   @map("device_name")
+  isActive     Int?      @default(1) @map("is_active")
+  lastActivity DateTime? @default(now()) @map("last_activity")
+  createdAt    DateTime? @default(now()) @map("created_at")
 
-  @@unique([localAgentId, superAgentId, franchiseId], name: "local_agent_id_super_agent_id_franchise_id")
-  @@index([status], map: "idx_agent_assignments_status")
-  @@index([franchiseId], map: "idx_agent_assignments_franchise")
-  @@index([superAgentId], map: "idx_agent_assignments_super_agent")
-  @@index([localAgentId], map: "idx_agent_assignments_local_agent")
-  @@map("agent_assignments")
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("user_login_sessions")
+}
+
+model UserNotification {
+  id        Int       @id @default(autoincrement())
+  userId    Int?      @map("user_id")
+  eventId   Int?      @map("event_id")
+  title     String
+  message   String
+  isRead    Int?      @default(0) @map("is_read")
+  actionUrl String?   @map("action_url")
+  expiresAt DateTime? @map("expires_at")
+  createdAt DateTime? @default(now()) @map("created_at")
+
+  // Relations
+  event NotificationEvent? @relation("NotificationToUser", fields: [eventId], references: [id])
+  user  User?              @relation(fields: [userId], references: [id])
+
+  @@map("user_notifications")
 }
 
 model RegionalManagerAssignment {
-  id                Int     @id @default(autoincrement())
-  regionalManagerId Int     @map("regional_manager_id")
-  agentId           Int     @map("agent_id")
-  status            String  @default("active")
-  assignedAt        String? @default("CURRENT_TIMESTAMP") @map("assigned_at")
-  assignedBy        String  @default("admin") @map("assigned_by")
-  updatedAt         String? @default("CURRENT_TIMESTAMP") @map("updated_at")
-  regionalManager   User    @relation(fields: [regionalManagerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  agent             Agent   @relation(fields: [agentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                Int       @id @default(autoincrement())
+  regionalManagerId Int       @map("regional_manager_id")
+  agentId           Int       @map("agent_id")
+  status            String    @default("active")
+  assignedAt        DateTime? @default(now()) @map("assigned_at")
+  assignedBy        String    @default("admin") @map("assigned_by")
+  updatedAt         DateTime? @default(now()) @map("updated_at")
 
-  @@index([status], map: "idx_regional_manager_assignments_status")
-  @@index([regionalManagerId], map: "idx_regional_manager_assignments_regional_manager")
-  @@index([agentId], map: "idx_regional_manager_assignments_agent")
+  // Relations
+  regionalManager User  @relation(fields: [regionalManagerId], references: [id])
+  agent           Agent @relation(fields: [agentId], references: [id])
+
+  @@index([status])
   @@map("regional_manager_assignments")
 }
 
 model FaqCategory {
   id         Int           @id @default(autoincrement())
-  slug       String        @unique(map: "sqlite_autoindex_faq_categories_1")
+  slug       String        @unique
   title      String
   icon       String
   subtitle   String
@@ -241,21 +313,21 @@ model FaqCategory {
 model FaqQuestion {
   id         Int          @id @default(autoincrement())
   categoryId Int?         @map("category_id")
-  slug       String       @unique(map: "sqlite_autoindex_faq_questions_1")
+  slug       String       @unique
   question   String
   answer     String
   orderIndex Int?         @default(0) @map("order_index")
   isActive   Int?         @default(1) @map("is_active")
   createdAt  DateTime?    @default(now()) @map("created_at")
   updatedAt  DateTime?    @default(now()) @map("updated_at")
-  category   FaqCategory? @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  category   FaqCategory? @relation(fields: [categoryId], references: [id])
 
   @@map("faq_questions")
 }
 
 model HelpCenterCategory {
   id            Int                     @id @default(autoincrement())
-  slug          String                  @unique(map: "sqlite_autoindex_help_center_categories_1")
+  slug          String                  @unique
   title         String
   icon          String
   avatarColor   String                  @map("avatar_color")
@@ -271,7 +343,7 @@ model HelpCenterCategory {
 model HelpCenterSubcategory {
   id         Int                 @id @default(autoincrement())
   categoryId Int?                @map("category_id")
-  slug       String              @unique(map: "sqlite_autoindex_help_center_subcategories_1")
+  slug       String              @unique
   title      String
   icon       String
   orderIndex Int?                @default(0) @map("order_index")
@@ -279,7 +351,7 @@ model HelpCenterSubcategory {
   createdAt  DateTime?           @default(now()) @map("created_at")
   updatedAt  DateTime?           @default(now()) @map("updated_at")
   articles   HelpCenterArticle[]
-  category   HelpCenterCategory? @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  category   HelpCenterCategory? @relation(fields: [categoryId], references: [id])
 
   @@map("help_center_subcategories")
 }
@@ -287,21 +359,21 @@ model HelpCenterSubcategory {
 model HelpCenterArticle {
   id            Int                    @id @default(autoincrement())
   subcategoryId Int?                   @map("subcategory_id")
-  slug          String                 @unique(map: "sqlite_autoindex_help_center_articles_1")
+  slug          String                 @unique
   title         String
   content       String
   orderIndex    Int?                   @default(0) @map("order_index")
   isActive      Int?                   @default(1) @map("is_active")
   createdAt     DateTime?              @default(now()) @map("created_at")
   updatedAt     DateTime?              @default(now()) @map("updated_at")
-  subcategory   HelpCenterSubcategory? @relation(fields: [subcategoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subcategory   HelpCenterSubcategory? @relation(fields: [subcategoryId], references: [id])
 
   @@map("help_center_articles")
 }
 
 model PopularArticle {
   id         Int       @id @default(autoincrement())
-  slug       String    @unique(map: "sqlite_autoindex_popular_articles_1")
+  slug       String    @unique
   title      String
   img        String
   subtitle   String
@@ -315,7 +387,7 @@ model PopularArticle {
 
 model KeepLearningArticle {
   id         Int       @id @default(autoincrement())
-  slug       String    @unique(map: "sqlite_autoindex_keep_learning_articles_1")
+  slug       String    @unique
   title      String
   img        String
   subtitle   String
@@ -329,7 +401,7 @@ model KeepLearningArticle {
 
 model GeneralSetting {
   id              Int       @id @default(autoincrement())
-  settingKey      String    @unique(map: "sqlite_autoindex_general_settings_1") @map("setting_key")
+  settingKey      String    @unique @map("setting_key")
   settingValue    String?   @map("setting_value")
   settingType     String    @map("setting_type")
   category        String
@@ -345,7 +417,7 @@ model GeneralSetting {
 
 model NotificationSetting {
   id            Int       @id @default(autoincrement())
-  name          String    @unique(map: "sqlite_autoindex_notification_settings_1")
+  name          String    @unique
   label         String
   description   String?
   emailEnabled  Int?      @default(1) @map("email_enabled")
@@ -361,16 +433,18 @@ model NotificationSetting {
 }
 
 model NotificationEvent {
-  id                Int                     @id @default(autoincrement())
-  eventType         String                  @map("event_type")
-  eventName         String                  @map("event_name")
-  description       String?
-  isActive          Int?                    @default(1) @map("is_active")
-  createdAt         DateTime?               @default(now()) @map("created_at")
-  updatedAt         DateTime?               @default(now()) @map("updated_at")
+  id          Int       @id @default(autoincrement())
+  eventType   String    @map("event_type")
+  eventName   String    @map("event_name")
+  description String?
+  isActive    Int?      @default(1) @map("is_active")
+  createdAt   DateTime? @default(now()) @map("created_at")
+  updatedAt   DateTime? @default(now()) @map("updated_at")
+
+  // Relations
   logs              NotificationLog[]
   recipients        NotificationRecipient[]
-  userNotifications UserNotification[]
+  userNotifications UserNotification[]      @relation("NotificationToUser")
 
   @@map("notification_events")
 }
@@ -381,7 +455,7 @@ model NotificationRecipient {
   recipientType  String             @map("recipient_type")
   recipientValue String?            @map("recipient_value")
   createdAt      DateTime?          @default(now()) @map("created_at")
-  event          NotificationEvent? @relation(fields: [eventId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  event          NotificationEvent? @relation(fields: [eventId], references: [id])
 
   @@map("notification_recipients")
 }
@@ -395,99 +469,34 @@ model NotificationLog {
   recipientId   Int?               @map("recipient_id")
   recipientType String?            @map("recipient_type")
   status        String?            @default("pending")
-  sentAt        String?            @map("sent_at")
+  sentAt        DateTime?          @map("sent_at")
   createdAt     DateTime?          @default(now()) @map("created_at")
-  event         NotificationEvent? @relation(fields: [eventId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  event         NotificationEvent? @relation(fields: [eventId], references: [id])
 
   @@map("notification_logs")
 }
 
-model UserNotification {
-  id        Int                @id @default(autoincrement())
-  userId    Int?               @map("user_id")
-  eventId   Int?               @map("event_id")
-  title     String
-  message   String
-  isRead    Int?               @default(0) @map("is_read")
-  actionUrl String?            @map("action_url")
-  expiresAt String?            @map("expires_at")
-  createdAt DateTime?          @default(now()) @map("created_at")
-  event     NotificationEvent? @relation(fields: [eventId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  user      User?              @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@map("user_notifications")
-}
-
-model agent_suspensions {
-  id                                                  Int       @id @default(autoincrement())
-  agent_id                                            Int
-  suspended_by_user_id                                Int
-  reason                                              String
-  status                                              String    @default("pending")
-  created_at                                          DateTime? @default(now())
-  approved_at                                         DateTime?
-  approved_by_user_id                                 Int?
-  users_agent_suspensions_approved_by_user_idTousers  User?     @relation("agent_suspensions_approved_by_user_idTousers", fields: [approved_by_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  users_agent_suspensions_suspended_by_user_idTousers User      @relation("agent_suspensions_suspended_by_user_idTousers", fields: [suspended_by_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  agents                                              Agent     @relation(fields: [agent_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-}
-
-model commissions {
-  id                  Int       @id @default(autoincrement())
-  agent_id            Int
-  agent_name          String
-  agent_type          String
-  period              String
-  transaction_count   Int?      @default(0)
-  total_amount        Float?    @default(0)
-  eligible_amount     Float?    @default(0)
-  commission_rate     Float?    @default(0)
-  commission_amount   Float?    @default(0)
-  payband             Float?    @default(0)
-  calculation_details String?
-  status              String?   @default("calculated")
-  created_at          DateTime? @default(now())
-  updated_at          DateTime? @default(now())
-  agents              Agent     @relation(fields: [agent_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-}
-
-model user_login_sessions {
-  id            Int     @id @default(autoincrement())
-  user_id       Int
-  session_id    String
-  ip_address    String
-  user_agent    String?
-  location      String?
-  browser       String?
-  os            String?
-  device_type   String?
-  device_name   String?
-  is_active     Int?    @default(1)
-  last_activity String? @default("CURRENT_TIMESTAMP")
-  created_at    String? @default("CURRENT_TIMESTAMP")
-  users         User    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-}
-
 model CommissionSchedule {
-  id               Int       @id @default(autoincrement())
-  frequency        String    @map("frequency")
-  dayOfMonth       Int?      @default(1) @map("day_of_month")
-  calculationType  String?   @default("all") @map("calculation_type")
-  isActive         Int?      @default(1) @map("is_active")
-  lastRun          String?   @map("last_run")
-  nextRun          String?   @map("next_run")
-  createdAt        String?   @default("CURRENT_TIMESTAMP") @map("created_at")
-  updatedAt        String?   @default("CURRENT_TIMESTAMP") @map("updated_at")
+  id              Int       @id @default(autoincrement())
+  frequency       String    @map("frequency")
+  dayOfMonth      Int?      @default(1) @map("day_of_month")
+  calculationType String?   @default("all") @map("calculation_type")
+  isActive        Int?      @default(1) @map("is_active")
+  lastRun         DateTime? @map("last_run")
+  nextRun         DateTime? @map("next_run")
+  createdAt       DateTime? @default(now()) @map("created_at")
+  updatedAt       DateTime? @default(now()) @map("updated_at")
 
   @@map("commission_schedules")
 }
 
 model UploadedFile {
-  id String @id
-  originalName String @map("original_name")
-  filePath String @map("file_path")
-  fileSize Int @map("file_size")
-  uploadedAt DateTime @map("uploaded_at")
-  status String
+  id           String   @id
+  originalName String   @map("original_name")
+  filePath     String   @map("file_path")
+  fileSize     Int      @map("file_size")
+  uploadedAt   DateTime @map("uploaded_at")
+  status       String
+
   @@map("uploaded_files")
 }

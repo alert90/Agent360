@@ -8,7 +8,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const offset = (Number(page) - 1) * Number(limit)
 
-      // Build where clause - start with empty, will add filters
+      // Build where clause
       const whereClause: any = {}
 
       // Add search filter
@@ -21,7 +21,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       // Add type filter
-      if (type) {
+      if (type && type !== '') {
         whereClause.type = type
       }
 
@@ -83,7 +83,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         orderBy: { type: 'asc' }
       })
 
-      // Get statistics - count all agents without any filter
+      // Get statistics
       const allAgentsCount = await prisma.agent.count()
       const superAgentCount = await prisma.agent.count({ where: { type: 'super_agent' } })
       const franchiseCount = await prisma.agent.count({ where: { type: 'franchise' } })
@@ -97,7 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         username: agent.username,
         email: agent.email,
         role: agent.role,
-        type: agent.type,
+        type: agent.type || 'local_agent',
         branch_code: agent.branchCode,
         branch_name: agent.branchName,
         zone: agent.zone,
@@ -124,7 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           totalPages: Math.ceil(total / Number(limit))
         },
         filters: {
-          types: types.map(t => t.type)
+          types: types.map(t => t.type).filter(Boolean)
         },
         stats: {
           totalAgents: allAgentsCount || 0,

@@ -1,9 +1,16 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 import jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
+import formidable from 'formidable'
+import fs from 'fs'
+import path from 'path'
 
-const db = new Database('agent360.db')
+export const config = {
+  api: {
+    bodyParser: false // Disable bodyParser for file uploads
+  }
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'PUT') {
@@ -22,39 +29,131 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Verify token and get user ID
     const decoded = jwt.verify(token, process.env.NEXT_PUBLIC_JWT_SECRET!) as { id: number }
 
-    const { type, data } = req.body
+    // Check if this is a multipart form (file upload) or JSON
+    const contentType = req.headers['content-type'] || ''
+
+    if (contentType.includes('multipart/form-data')) {
+      // Handle profile picture upload
+      return handleProfilePictureUpload(req, res, decoded.id)
+    } else {
+      // Handle JSON data
+      return handleJsonUpdate(req, res, decoded.id)
+    }
+  } catch (error) {
+    console.error('Error updating profile:', error)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+}
+
+async function handleProfilePictureUpload(req: NextApiRequest, res: NextApiResponse, userId: number) {
+  try {
+    const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'avatars')
+
+    // Ensure upload directory exists
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true })
+    }
+
+    const form = formidable({
+      uploadDir,
+      keepExtensions: true,
+      maxFileSize: 2 * 1024 * 1024, // 2MB limit
+      filename: (name, ext, part) => {
+        // Generate unique filename
+        return `avatar-${userId}-${Date.now()}${ext}`
+      }
+    })
+
+    const [fields, files] = await new Promise<[any, any]>((resolve, reject) => {
+      form.parse(req, (err, fields, files) => {
+        if (err) reject(err)
+        else resolve([fields, files])
+      })
+    })
+
+    const file = files.avatar || files.profilePicture
+    if (!file) {
+      return res.status(400).json({ message: 'No file uploaded' })
+    }
+
+    // Get the uploaded file path
+    const filePath = file[0].filepath
+    const fileName = path.basename(filePath)
+    const publicUrl = `/uploads/avatars/${fileName}`
+
+    // Update user avatar in database
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        avatar: publicUrl,
+        updatedAt: new Date()
+      }
+    })
+
+    return res.status(200).json({
+      message: 'Profile picture updated successfully',
+      avatar: publicUrl
+    })
+  } catch (error) {
+    console.error('Profile picture upload error:', error)
+
+    return res.status(500).json({ message: 'Failed to upload profile picture' })
+  }
+}
+
+async function handleJsonUpdate(req: NextApiRequest, res: NextApiResponse, userId: number) {
+  try {
+    // Parse JSON body
+    const buffers = []
+    for await (const chunk of req) {
+      buffers.push(chunk)
+    }
+    const data = JSON.parse(Buffer.concat(buffers).toString())
+    const { type, data: formData } = data
 
     if (type === 'profile') {
       // Update profile information
       const { firstName, lastName, email, organization, number, address, state, zipCode, country, language, timezone } =
-        data
+        formData
 
-      // Combine first and last name for full_name
       const fullName = `${firstName} ${lastName}`.trim()
 
-      const updateStmt = db.prepare(`
-        UPDATE users
-        SET full_name = ?, email = ?, location = ?, phone_number = ?, address = ?, zip_code = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `)
-
-      updateStmt.run(fullName, email, state || '', number || '', address || '', zipCode || '', decoded.id)
+      const updatedUser = await prisma.user.update({
+        where: { id: userId },
+        data: {
+          fullName,
+          email,
+          location: state,
+          phoneNumber: number,
+          address,
+          zipCode,
+          updatedAt: new Date()
+        }
+      })
 
       return res.status(200).json({
         message: 'Profile updated successfully',
-        user: { fullName, email, location: state, phoneNumber: number, address, zipCode }
+        user: {
+          fullName: updatedUser.fullName,
+          email: updatedUser.email,
+          location: updatedUser.location,
+          phoneNumber: updatedUser.phoneNumber,
+          address: updatedUser.address,
+          zipCode: updatedUser.zipCode
+        }
       })
     } else if (type === 'password') {
       // Change password
-      const { currentPassword, newPassword } = data
+      const { currentPassword, newPassword } = formData
 
       if (!currentPassword || !newPassword) {
         return res.status(400).json({ message: 'Current password and new password are required' })
       }
 
       // Get current user
-      const userStmt = db.prepare('SELECT password FROM users WHERE id = ?')
-      const user = userStmt.get(decoded.id) as any
+      const user = await prisma.user.findUnique({
+        where: { id: userId }
+      })
 
       if (!user) {
         return res.status(404).json({ message: 'User not found' })
@@ -70,33 +169,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const hashedPassword = await bcrypt.hash(newPassword, 12)
 
       // Update password
-      const updateStmt = db.prepare(`
-        UPDATE users
-        SET password = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `)
-
-      updateStmt.run(hashedPassword, decoded.id)
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          password: hashedPassword,
+          updatedAt: new Date()
+        }
+      })
 
       return res.status(200).json({ message: 'Password changed successfully' })
     } else if (type === 'profilePicture') {
-      // Handle profile picture upload
-      const { avatar } = data
+      // Handle base64 image
+      const { avatar } = formData
 
-      const updateStmt = db.prepare(`
-        UPDATE users
-        SET avatar = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `)
+      if (avatar && avatar.startsWith('data:image')) {
+        // Convert base64 to file
+        const base64Data = avatar.split(',')[1]
+        const buffer = Buffer.from(base64Data, 'base64')
 
-      updateStmt.run(avatar || '', decoded.id)
+        const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'avatars')
+        if (!fs.existsSync(uploadDir)) {
+          fs.mkdirSync(uploadDir, { recursive: true })
+        }
 
-      return res.status(200).json({ message: 'Profile picture updated successfully' })
+        const fileName = `avatar-${userId}-${Date.now()}.png`
+        const filePath = path.join(uploadDir, fileName)
+
+        fs.writeFileSync(filePath, buffer)
+
+        const publicUrl = `/uploads/avatars/${fileName}`
+
+        await prisma.user.update({
+          where: { id: userId },
+          data: {
+            avatar: publicUrl,
+            updatedAt: new Date()
+          }
+        })
+
+        return res.status(200).json({
+          message: 'Profile picture updated successfully',
+          avatar: publicUrl
+        })
+      }
     }
 
     return res.status(400).json({ message: 'Invalid update type' })
   } catch (error) {
-    console.error('Error updating profile:', error)
-    res.status(500).json({ message: 'Internal server error' })
+    console.error('JSON update error:', error)
+
+    return res.status(500).json({ message: 'Internal server error' })
   }
 }

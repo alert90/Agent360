@@ -8,11 +8,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const { id } = req.query
 
-  if (!id) {
+  if (!id || typeof id !== 'string') {
     return res.status(400).json({ message: 'Agent ID is required' })
   }
 
-  const agentId = parseInt(id as string)
+  const agentId = parseInt(id)
 
   try {
     if (req.method === 'GET') {
@@ -27,15 +27,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })
       }
 
+      // Transform to camelCase for frontend
+      const transformedAgent = {
+        id: agent.id,
+        name: agent.name,
+        accountNumber: agent.accountNumber,
+        type: agent.type,
+        isActive: agent.isActive,
+        parentAgentId: agent.parentAgentId,
+        email: agent.email,
+        phone: agent.phone,
+        contact: agent.contact,
+        address: null,
+        createdAt: agent.createdAt
+      }
+
       res.status(200).json({
         success: true,
-        data: agent
+        data: transformedAgent
       })
     } else if (req.method === 'PUT') {
       const { name, accountNumber, type, isActive, email, phone, contact, branchCode, branchName, region, zone } =
         req.body
-
-      console.log('Agent update request:', { id, name, accountNumber, type, isActive })
 
       // Validate required fields
       if (!name || name.trim() === '') {
@@ -49,14 +62,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({
           success: false,
           message: 'Account number is required and cannot be empty'
-        })
-      }
-
-      // Validate type if provided
-      if (type && type.trim() !== '' && !['local_agent', 'super_agent', 'franchise'].includes(type)) {
-        return res.status(400).json({
-          success: false,
-          message: `Invalid agent type: "${type}". Must be local_agent, super_agent, or franchise`
         })
       }
 
@@ -90,27 +95,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           updatedAt: new Date()
         }
       })
-
-      // Auto-populate branch data if missing
-      if (!branchCode || !branchName) {
-        const branchData = await prisma.transaction.findFirst({
-          where: { agentId: agentId },
-          orderBy: { createdAt: 'desc' },
-          select: { location: true }
-        })
-
-        if (branchData && branchData.location) {
-          await prisma.agent.update({
-            where: { id: agentId },
-            data: {
-              branchCode: branchCode || existingAgent.branchCode,
-              branchName: branchName || branchData.location,
-              updatedAt: new Date()
-            }
-          })
-          console.log(`Auto-populated branch data for agent ${id}`)
-        }
-      }
 
       res.status(200).json({
         success: true,

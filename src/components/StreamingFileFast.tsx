@@ -71,7 +71,8 @@ interface PaginatedData {
 
 const CHUNK_SIZE = 800 * 1024
 const ROWS_PER_PAGE = 100
-const BATCH_SIZE = 1000 // Reduced from 10000 to 2000 - this actually works
+const BATCH_SIZE = 10000 // 10,000 transactions per batch
+const CONCURRENT_BATCHES = 5 // 5 concurrent batches = 50,000 rows at a time
 
 interface StreamingFileUploadProps {
   onUploadComplete?: (result: UploadResult) => void
@@ -139,38 +140,6 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
     return account
   }
 
-  const determineTransactionType = (narration: string, amountDebit: string, amountCredit: string): string => {
-    const lowerNarration = narration.toLowerCase()
-    const hasDebit = amountDebit && parseFloat(amountDebit.replace(/,/g, '')) > 0
-    const hasCredit = amountCredit && parseFloat(amountCredit.replace(/,/g, '')) > 0
-
-    // Keywords for deposits (English & Swahili)
-    if (
-      lowerNarration.includes('deposit') ||
-      lowerNarration.includes('kuweka') ||
-      lowerNarration.includes('malipo') ||
-      lowerNarration.includes('dep')
-    ) {
-      return 'deposit'
-    }
-
-    // Keywords for withdrawals
-    if (
-      lowerNarration.includes('withdrawal') ||
-      lowerNarration.includes('kutoa') ||
-      lowerNarration.includes('withdraw') ||
-      lowerNarration.includes('toa')
-    ) {
-      return 'withdrawal'
-    }
-
-    // Fallback to column-based detection
-    if (hasDebit) return 'withdrawal'
-    if (hasCredit) return 'deposit'
-
-    return 'transfer'
-  }
-
   const uploadFile = useCallback(async (file: File): Promise<UploadResult> => {
     const fileId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     const startTime = Date.now()
@@ -191,7 +160,7 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
       // Parse CSV
       const fileContent = await file.text()
 
-      setUploadProgress(prev => (prev ? { ...prev, progress: 15 } : null))
+      setUploadProgress(prev => (prev ? { ...prev, progress: 20 } : null))
 
       const parseResult = Papa.parse(fileContent, {
         header: true,
@@ -204,8 +173,6 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
         throw new Error('No data found in CSV file')
       }
 
-      setUploadProgress(prev => (prev ? { ...prev, progress: 25 } : null))
-
       // Convert to transactions
       const transactions = parseResult.data
         .map((row: any, index: number) => {
@@ -213,18 +180,16 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
           const refMatch = narration.match(/REF:([a-f0-9]+)/i)
           const transactionId = refMatch ? refMatch[1] : `TXN_${Date.now()}_${index}`
 
-          const amountDebit = row.AMOUNTDEBIT || '0'
-          const amountCredit = row.AMOUNTCREDIT || '0'
-
-          // Determine amount
           let amount = 0
-          if (amountDebit && parseFloat(amountDebit.replace(/,/g, '')) > 0) {
-            amount = parseFloat(amountDebit.replace(/,/g, ''))
-          } else if (amountCredit && parseFloat(amountCredit.replace(/,/g, '')) > 0) {
-            amount = parseFloat(amountCredit.replace(/,/g, ''))
-          }
+          let type = 'transfer'
 
-          const type = determineTransactionType(narration, amountDebit, amountCredit)
+          if (row.AMOUNTDEBIT && parseFloat(row.AMOUNTDEBIT.replace(/,/g, '')) > 0) {
+            amount = parseFloat(row.AMOUNTDEBIT.replace(/,/g, ''))
+            type = 'withdrawal'
+          } else if (row.AMOUNTCREDIT && parseFloat(row.AMOUNTCREDIT.replace(/,/g, '')) > 0) {
+            amount = parseFloat(row.AMOUNTCREDIT.replace(/,/g, ''))
+            type = 'deposit'
+          }
 
           return {
             id: transactionId,
@@ -247,7 +212,7 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
         throw new Error('No valid transactions found in CSV')
       }
 
-      console.log(`✅ Parsed ${transactions.length} valid transactions`)
+      console.log(`Parsed ${transactions.length} valid transactions`)
 
       setUploadProgress({
         stage: 'uploading',
@@ -261,7 +226,7 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
         errors: []
       })
 
-      // Send in reasonably sized batches
+      // Ultra-fast parallel batch processing
       let totalCreated = 0
       let totalSkipped = 0
       let totalNewAgents = 0
@@ -269,37 +234,45 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
 
       const totalBatches = Math.ceil(transactions.length / BATCH_SIZE)
 
-      for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-        const start = batchIndex * BATCH_SIZE
-        const batch = transactions.slice(start, start + BATCH_SIZE)
+      for (let batchIndex = 0; batchIndex < totalBatches; batchIndex += CONCURRENT_BATCHES) {
+        const batchPromises = []
 
-        console.log(`Sending batch ${batchIndex + 1}/${totalBatches} with ${batch.length} transactions`)
+        for (let j = 0; j < CONCURRENT_BATCHES; j++) {
+          const currentBatch = batchIndex + j
+          if (currentBatch >= totalBatches) break
 
-        const response = await fetch('/api/transactions/import', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ transactions: batch })
-        })
+          const start = currentBatch * BATCH_SIZE
+          const batch = transactions.slice(start, start + BATCH_SIZE)
 
-        if (!response.ok) {
-          const errorText = await response.text()
-          console.error('Batch failed:', errorText)
-          throw new Error(`Import failed at batch ${batchIndex + 1}: ${response.status}`)
+          batchPromises.push(
+            fetch('/api/transactions/import', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ transactions: batch })
+            }).then(async res => {
+              const result = await res.json()
+              if (!res.ok) throw new Error(result.message || 'Batch failed')
+
+              return result
+            })
+          )
         }
 
-        const result = await response.json()
+        if (batchPromises.length > 0) {
+          const results = await Promise.all(batchPromises)
 
-        totalCreated += result.stats?.created || 0
-        totalSkipped += result.stats?.skipped || 0
-        totalNewAgents += result.stats?.newAgents || 0
-
-        if (result.errors) {
-          allErrors.push(...result.errors)
+          results.forEach(result => {
+            totalCreated += result.stats?.created || 0
+            totalSkipped += result.stats?.skipped || 0
+            totalNewAgents += result.stats?.newAgents || 0
+            if (result.errors) allErrors.push(...result.errors)
+          })
         }
 
-        const progress = 30 + Math.floor(((batchIndex + 1) / totalBatches) * 65)
+        const processedBatches = Math.min(batchIndex + CONCURRENT_BATCHES, totalBatches)
+        const progress = 30 + Math.floor((processedBatches / totalBatches) * 65)
         setUploadProgress(prev => (prev ? { ...prev, progress } : null))
       }
 
@@ -316,10 +289,11 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
       })
 
       const processingTime = (Date.now() - startTime) / 1000
+      const rowsPerSecond = Math.round(totalCreated / processingTime)
 
       return {
         success: true,
-        message: `✅ ${totalCreated} created, ${totalSkipped} skipped`,
+        message: `🔥 ${totalCreated} created, ${totalSkipped} skipped (${rowsPerSecond} rows/sec)`,
         fileId,
         stats: {
           total: transactions.length,
@@ -412,6 +386,13 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
     const i = Math.floor(Math.log(bytes) / Math.log(k))
 
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+  }
+
+  const formatTime = (seconds: number): string => {
+    if (seconds < 60) return `${seconds.toFixed(0)}s`
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(0)}s`
+
+    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
   }
 
   const getStageColor = (stage: string) => {
@@ -543,11 +524,17 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
           <Card>
             <CardContent>
               <Typography variant='h6' gutterBottom>
-                Upload Settings
+                Turbo Mode Settings
               </Typography>
               <Box sx={{ mb: 2 }}>
                 <Typography variant='body2' color='text.secondary' gutterBottom>
-                  Batch Size: {BATCH_SIZE} transactions per request
+                  Batch Size: {BATCH_SIZE.toLocaleString()} transactions/request
+                </Typography>
+                <Typography variant='body2' color='text.secondary' gutterBottom>
+                  Concurrent Batches: {CONCURRENT_BATCHES}
+                </Typography>
+                <Typography variant='body2' color='text.secondary' gutterBottom>
+                  Throughput: {(BATCH_SIZE * CONCURRENT_BATCHES).toLocaleString()} rows per cycle
                 </Typography>
                 <Typography variant='body2' color='text.secondary' gutterBottom>
                   Max File Size: {formatFileSize(maxFileSize)}

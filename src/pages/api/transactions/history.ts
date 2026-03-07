@@ -1,15 +1,13 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from 'src/lib/prisma'
 import jwt from 'jsonwebtoken'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const db = new Database('agent360.db')
+  if (req.method !== 'GET') {
+    return res.status(405).json({ message: 'Method not allowed' })
+  }
 
   try {
-    if (req.method !== 'GET') {
-      return res.status(405).json({ message: 'Method not allowed' })
-    }
-
     // Verify JWT token
     const token = req.headers.authorization?.replace('Bearer ', '')
     if (!token) {
@@ -17,135 +15,118 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const decoded = jwt.verify(token, process.env.NEXT_PUBLIC_JWT_SECRET!) as any
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(decoded.id) as any
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.id }
+    })
 
     if (!user) {
       return res.status(401).json({ message: 'User not found' })
     }
 
-    const {
-      search = '',
-      page = 1,
-      limit = 50,
-      type = '',
-      status = '',
-      months = 3 // Default to 3 months
-    } = req.query
+    const { search = '', page = 1, limit = 50, type = '', status = '', months = 3 } = req.query
 
     const offset = (Number(page) - 1) * Number(limit)
-    let whereClause = 'WHERE 1=1'
-    const params: any[] = []
+
+    // Build where clause
+    const whereClause: any = {}
 
     // Apply role-based filtering
     if (user.role === 'agent') {
-      whereClause += ' AND agent_id = ?'
-      params.push(user.id)
-    } else if (user.role === 'super_agent' || user.role === 'franchise') {
-      // Get agents under this user
-      const userAgents = db.prepare('SELECT id FROM agents WHERE parent_agent_id = ?').all(user.id) as any[]
+      whereClause.agentId = user.id
+    } else if (user.role === 'super_agent' || user.role === 'franchise' || user.role === 'local_agent') {
+      const userAgents = await prisma.agent.findMany({
+        where: { parentAgentId: user.id },
+        select: { id: true }
+      })
       if (userAgents.length > 0) {
-        const agentIds = userAgents.map(agent => agent.id)
-        whereClause += ` AND agent_id IN (${agentIds.join(',')})`
+        whereClause.agentId = { in: userAgents.map(a => a.id) }
       } else {
-        whereClause += ' AND 1=0' // No agents under this user
+        whereClause.id = -1 // No results
       }
     }
 
-    // Add date range filter - default to last N months
+    // Add date range filter
     const monthsAgo = new Date()
     monthsAgo.setMonth(monthsAgo.getMonth() - Number(months))
-    whereClause += ' AND timestamp >= ?'
-    params.push(monthsAgo.toISOString())
+    whereClause.timestamp = { gte: monthsAgo }
 
     // Add search filter
     if (search) {
-      whereClause += ' AND (agent_name LIKE ? OR customer_name LIKE ? OR transaction_id LIKE ? OR narration LIKE ?)'
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`)
+      whereClause.OR = [
+        { agentName: { contains: search as string, mode: 'insensitive' } },
+        { customerName: { contains: search as string, mode: 'insensitive' } },
+        { transactionId: { contains: search as string, mode: 'insensitive' } },
+        { narration: { contains: search as string, mode: 'insensitive' } }
+      ]
     }
 
     // Add type filter
     if (type && type !== 'all') {
-      whereClause += ' AND type = ?'
-      params.push(type)
+      whereClause.type = type
     }
 
     // Add status filter
     if (status && status !== 'all') {
-      whereClause += ' AND status = ?'
-      params.push(status)
+      whereClause.status = status
     }
 
-    // Get transactions in descending order (latest first)
-    const transactionsQuery = `
-      SELECT
-        id,
-        transaction_id as transactionId,
-        agent_id as agentId,
-        agent_name as agentName,
-        customer_name as customerName,
-        customer_phone as customerPhone,
-        customer_account as customerAccount,
-        type,
-        amount,
-        fee,
-        net_amount as netAmount,
-        commission_amount as commissionAmount,
-        commission_eligible as commissionEligible,
-        status,
-        location,
-        zone,
-        channel,
-        narration,
-        reference,
-        initiated_by as initiatedBy,
-        timestamp,
-        created_at as createdAt
-      FROM transactions
-      ${whereClause}
-      ORDER BY timestamp DESC
-      LIMIT ? OFFSET ?
-    `
+    // Get transactions
+    const [transactions, total] = await Promise.all([
+      prisma.transaction.findMany({
+        where: whereClause,
+        orderBy: { timestamp: 'desc' },
+        skip: offset,
+        take: Number(limit)
+      }),
+      prisma.transaction.count({ where: whereClause })
+    ])
 
-    const transactions = db.prepare(transactionsQuery).all(...params, Number(limit), offset)
-
-    // Get total count for pagination
-    const countQuery = `
-      SELECT COUNT(*) as total
-      FROM transactions
-      ${whereClause}
-    `
-    const countResult = db.prepare(countQuery).get(...params)
-    const total = (countResult as any)?.total || 0
-
-    // Calculate statistics for the period
-    const statsQuery = `
-      SELECT
-        COUNT(*) as totalTransactions,
-        COALESCE(SUM(amount), 0) as totalAmount,
-        COALESCE(SUM(commission_amount), 0) as totalCommission,
-        COALESCE(AVG(amount), 0) as avgTransactionAmount
-      FROM transactions
-      ${whereClause}
-    `
-    const stats = db.prepare(statsQuery).get(...params) as any
+    // Calculate statistics
+    const stats = await prisma.transaction.aggregate({
+      where: whereClause,
+      _count: { id: true },
+      _sum: { amount: true, commissionAmount: true },
+      _avg: { amount: true }
+    })
 
     // Get transaction type breakdown
-    const typeBreakdownQuery = `
-      SELECT
-        type,
-        COUNT(*) as count,
-        COALESCE(SUM(amount), 0) as totalAmount,
-        COALESCE(SUM(commission_amount), 0) as totalCommission
-      FROM transactions
-      ${whereClause}
-      GROUP BY type
-      ORDER BY totalAmount DESC
-    `
-    const typeBreakdown = db.prepare(typeBreakdownQuery).all(...params)
+    const typeBreakdown = await prisma.transaction.groupBy({
+      by: ['type'],
+      where: whereClause,
+      _count: { type: true },
+      _sum: { amount: true, commissionAmount: true },
+      orderBy: { _sum: { amount: 'desc' } }
+    })
+
+    // Format transactions for response
+    const formattedTransactions = transactions.map(t => ({
+      id: t.id,
+      transactionId: t.transactionId,
+      agentId: t.agentId,
+      agentName: t.agentName,
+      customerName: t.customerName,
+      customerPhone: t.customerPhone,
+      customerAccount: t.customerAccount,
+      type: t.type,
+      amount: t.amount,
+      fee: t.fee,
+      netAmount: t.netAmount,
+      commissionAmount: t.commissionAmount,
+      commissionEligible: t.commissionEligible,
+      status: t.status,
+      location: t.location,
+      zone: t.zone,
+      channel: t.channel,
+      narration: t.narration,
+      reference: t.reference,
+      initiatedBy: t.initiatedBy,
+      timestamp: t.timestamp,
+      createdAt: t.createdAt
+    }))
 
     res.status(200).json({
       success: true,
-      data: transactions,
+      data: formattedTransactions,
       pagination: {
         page: Number(page),
         limit: Number(limit),
@@ -153,14 +134,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         totalPages: Math.ceil(total / Number(limit))
       },
       stats: {
-        totalTransactions: stats.totalTransactions || 0,
-        totalAmount: stats.totalAmount || 0,
-        totalCommission: stats.totalCommission || 0,
-        avgTransactionAmount: stats.avgTransactionAmount || 0,
+        totalTransactions: stats._count.id || 0,
+        totalAmount: stats._sum.amount || 0,
+        totalCommission: stats._sum.commissionAmount || 0,
+        avgTransactionAmount: stats._avg.amount || 0,
         period: `Last ${months} months`
       },
       breakdown: {
-        byType: typeBreakdown
+        byType: typeBreakdown.map(t => ({
+          type: t.type,
+          count: t._count.type,
+          totalAmount: t._sum.amount || 0,
+          totalCommission: t._sum.commissionAmount || 0
+        }))
       }
     })
   } catch (error) {
@@ -170,7 +156,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: 'Failed to fetch transaction history',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }

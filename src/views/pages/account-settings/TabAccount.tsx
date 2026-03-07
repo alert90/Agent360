@@ -156,16 +156,45 @@ const TabAccount = () => {
     setSecondDialogOpen(true)
   }
 
-  const handleInputImageChange = (file: ChangeEvent) => {
-    const reader = new FileReader()
-    const { files } = file.target as HTMLInputElement
-    if (files && files.length !== 0) {
-      reader.onload = () => setImgSrc(reader.result as string)
-      reader.readAsDataURL(files[0])
+  const handleInputImageChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
 
-      if (reader.result !== null) {
-        setInputValue(reader.result as string)
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please upload an image file')
+
+      return
+    }
+
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('File size must be less than 2MB')
+
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      setImgSrc(reader.result as string)
+    }
+    reader.readAsDataURL(file)
+
+    try {
+      const token = localStorage.getItem('accessToken')
+      const formData = new FormData()
+      formData.append('avatar', file)
+
+      const response = await axios.put('/api/user/update-profile', formData, {
+        headers: {
+          Authorization: token ? `Bearer ${token}` : '',
+          'Content-Type': 'multipart/form-data'
+        }
+      })
+      if (response.data.avatar) {
+        toast.success('Profile picture updated successfully')
       }
+    } catch (error) {
+      console.error('Error uploading profile picture:', error)
+      toast.error('Failed to upload profile picture')
+      setImgSrc('/images/avatars/user.png')
     }
   }
 

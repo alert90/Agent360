@@ -9,20 +9,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const commissionService = new CommissionCalculationService()
 
   try {
-    const { months } = req.query
-    const monthsNum = months ? parseInt(months as string) : 3
+    const { period } = req.query
 
-    const history = await commissionService.getCommissionHistory(monthsNum)
+    if (!period || typeof period !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Period is required (format: YYYY-MM)'
+      })
+    }
+
+    const report = await commissionService.getCommissionReport(period)
 
     res.status(200).json({
       success: true,
-      data: history
+      data: report
     })
   } catch (error) {
-    console.error('Commission history error:', error)
+    console.error('Commission report error:', error)
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch commission history',
+      message: 'Failed to fetch commission report',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
   }

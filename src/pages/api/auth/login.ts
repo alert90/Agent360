@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next/types'
 import jwt from 'jsonwebtoken'
 import { prisma } from 'src/lib/prisma'
+import bcrypt from 'bcryptjs'
 
 // Helper function to parse user agent
 function parseUserAgent(userAgent: string) {
@@ -142,10 +143,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Verify password using bcrypt
-    const isPasswordValid = password.trim() === user.password.trim()
+    let isPasswordValid = false
+
+    try {
+      isPasswordValid = await bcrypt.compare(password, user.password)
+    } catch (bcryptError) {
+      console.error('Bcrypt comparison error:', bcryptError)
+      isPasswordValid = password === user.password
+    }
 
     if (!isPasswordValid) {
-      console.log('Password mismatch')
+      console.log('Password mismatch for user:', email)
 
       return res.status(401).json({
         error: { email: ['Email or Password is Invalid'] }
@@ -173,22 +181,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const location = await getLocationFromIP(ipAddress)
 
     // Store login session in PostgreSQL using Prisma
-    await prisma.user_login_sessions.create({
-      data: {
-        user_id: user.id,
-        session_id: sessionId,
-        ip_address: ipAddress,
-        user_agent: userAgent,
-        location,
-        browser: deviceInfo.browser,
-        os: deviceInfo.os,
-        device_type: deviceInfo.deviceType,
-        device_name: deviceName,
-        is_active: 1,
-        last_activity: new Date().toISOString(),
-        created_at: new Date().toISOString()
-      }
-    })
+    try {
+      await prisma.userLoginSession.create({
+        data: {
+          userId: user.id,
+          sessionId: sessionId,
+          ipAddress: ipAddress,
+          userAgent: userAgent,
+          location,
+          browser: deviceInfo.browser,
+          os: deviceInfo.os,
+          deviceType: deviceInfo.deviceType,
+          deviceName: deviceName,
+          isActive: 1,
+          lastActivity: new Date(),
+          createdAt: new Date()
+        }
+      })
+    } catch (sessionError) {
+      console.error('Error creating session:', sessionError)
+    }
 
     // Generate JWT token
     const jwtSecret = process.env.NEXT_PUBLIC_JWT_SECRET || process.env.JWT_SECRET
@@ -204,9 +216,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log('JWT Secret found, length:', jwtSecret.length)
 
-    const accessToken = jwt.sign({ id: user.id, email: user.email, role: user.role }, jwtSecret, {
-      expiresIn: jwtExpiration
-    })
+    const accessToken = jwt.sign(
+      {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        username: user.username
+      },
+      jwtSecret,
+      {
+        expiresIn: jwtExpiration
+      }
+    )
 
     // Transform field names to match frontend types and exclude password
     const userWithoutPassword = {

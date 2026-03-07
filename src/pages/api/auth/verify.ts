@@ -30,10 +30,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const userWithoutPassword = {
       id: user.id,
       email: user.email,
-      fullName: user.fullName, // Use Prisma camelCase field
+      fullName: user.fullName,
       username: user.username,
       role: user.role,
-      permissions: user.permissions,
+      permissions: user.permissions ? JSON.parse(user.permissions) : [],
       location: user.location,
       zone: user.zone,
       phoneNumber: user.phoneNumber,

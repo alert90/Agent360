@@ -51,12 +51,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
       if (userAgents.length > 0) {
         whereClause.agentId = { in: userAgents.map(a => a.id) }
-      } else {
-        whereClause.id = 0 // No agents under this user
       }
+
+      // If no agents under this user, show all transactions (or you can set to empty)
     }
 
-    // Add search filter - include customerAccount for searching by account number
+    // Add search filter
     if (search) {
       whereClause.OR = [
         { agentName: { contains: search as string, mode: 'insensitive' } },
@@ -68,12 +68,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Add type filter
-    if (type && type !== 'all') {
+    if (type && type !== 'all' && type !== '') {
       whereClause.type = type
     }
 
     // Add status filter
-    if (status && status !== 'all') {
+    if (status && status !== 'all' && status !== '') {
       whereClause.status = status
     }
 
@@ -139,9 +139,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     })
 
+    // Format transactions for frontend
+    const formattedTransactions = transactions.map(t => ({
+      id: t.id,
+      transactionId: t.transactionId,
+      agentId: t.agentId,
+      agentName: t.agentName,
+      customerName: t.customerName,
+      customerAccount: t.customerAccount,
+      type: t.type,
+      amount: t.amount,
+      commissionAmount: t.commissionAmount,
+      status: t.status,
+      timestamp: t.timestamp,
+      location: t.location,
+      narration: t.narration
+    }))
+
     res.status(200).json({
       success: true,
-      data: transactions,
+      data: formattedTransactions,
       pagination: {
         page: Number(page),
         limit: Number(limit),
@@ -150,9 +167,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       stats: {
         totalTransactions: stats._count.id || 0,
-        totalAmount: stats._sum.amount || 0,
-        totalCommission: stats._sum.commissionAmount || 0,
-        avgTransactionAmount: stats._avg.amount || 0
+        totalAmount: Number(stats._sum.amount) || 0,
+        totalCommission: Number(stats._sum.commissionAmount) || 0,
+        avgTransactionAmount: Number(stats._avg.amount) || 0
       }
     })
   } catch (error) {

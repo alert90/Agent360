@@ -10,135 +10,137 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     if (req.method === 'GET') {
-      // Get detailed transaction information using raw query
-      // Note: id can be either numeric ID or transaction_id string
-      const numericId = parseInt(id)
-      const transaction = (await prisma.$queryRawUnsafe(
-        `
-        SELECT
-          t.*,
-          a.name as agent_name,
-          a.account_number as agent_account,
-          a.branch_name as agent_branch,
-          a.type as agent_type,
-          parent_agent.name as parent_agent_name,
-          parent_agent.account_number as parent_agent_account
-        FROM transactions t
-        LEFT JOIN agents a ON t.agent_id = a.id
-        LEFT JOIN agents parent_agent ON a.parent_agent_id = parent_agent.id
-        WHERE t.id = $1 OR t.transaction_id = $2
-      `,
-        numericId,
-        id
-      )) as any[]
+      // Try to find by transactionId
+      const transaction = await prisma.transaction.findUnique({
+        where: { transactionId: id },
+        include: {
+          agent: {
+            include: {
+              parentAgent: true
+            }
+          }
+        }
+      })
 
-      if (!transaction || transaction.length === 0) {
+      if (!transaction) {
         return res.status(404).json({ message: 'Transaction not found' })
       }
 
-      const tx = transaction[0]
-
-      // Get related transactions (same transaction_id for grouped transactions)
-      const relatedTransactions = (await prisma.$queryRawUnsafe(
-        `
-        SELECT
-          t.*,
-          a.name as agent_name,
-          a.account_number as agent_account
-        FROM transactions t
-        LEFT JOIN agents a ON t.agent_id = a.id
-        WHERE t.transaction_id = $1 AND t.id != $2
-        ORDER BY t.timestamp ASC
-      `,
-        tx.transaction_id,
-        tx.id
-      )) as any[]
-
-      // Calculate commission details
-      let commissionBreakdown = {}
-
-      if (tx.agent_type === 'local_agent') {
-        commissionBreakdown = {
-          type: 'local_agent',
-          description: 'Direct commission on transaction',
-          rate: '5%',
-          amount: tx.commission_amount || 0
+      // Format customer account to handle scientific notation
+      const formatAccountNumber = (account: string | null) => {
+        if (!account) return 'N/A'
+        if (account.includes('E+')) {
+          try {
+            const num = parseFloat(account)
+            if (!isNaN(num)) {
+              return num.toFixed(0)
+            }
+          } catch (e) {
+            // ignore
+          }
         }
-      } else if (tx.agent_type === 'super_agent') {
+
+        return account
+      }
+
+      // Find related transactions (same day, same agent, similar amount)
+      const relatedTransactions = await prisma.transaction.findMany({
+        where: {
+          agentId: transaction.agentId,
+          timestamp: {
+            gte: new Date(new Date(transaction.timestamp).setHours(0, 0, 0, 0)),
+            lt: new Date(new Date(transaction.timestamp).setHours(23, 59, 59, 999))
+          },
+          id: { not: transaction.id }
+        },
+        take: 10,
+        orderBy: { timestamp: 'desc' }
+      })
+
+      // Determine commission breakdown based on agent type
+      let commissionBreakdown = {
+        type: 'local_agent',
+        description: 'Direct commission on transaction',
+        rate: '5%',
+        amount: transaction.commissionAmount || 0
+      }
+
+      if (transaction.agent?.type === 'super_agent') {
         commissionBreakdown = {
           type: 'super_agent',
           description: 'Commission from served agents',
           rate: '20% of agent commissions',
-          amount: tx.commission_amount || 0
+          amount: transaction.commissionAmount || 0
         }
-      } else if (tx.agent_type === 'franchise') {
+      } else if (transaction.agent?.type === 'franchise') {
         commissionBreakdown = {
           type: 'franchise',
           description: 'Commission based on agent performance',
           rate: 'Based on turnover multiplier',
-          amount: tx.commission_amount || 0
+          amount: transaction.commissionAmount || 0
         }
       }
 
-      // Format transaction data for invoice-like display
       const invoiceData = {
         transaction: {
-          id: tx.transaction_id,
-          internalId: tx.id,
-          date: new Date(tx.timestamp).toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-          }),
-          status: tx.status,
-          type: tx.type,
-          channel: tx.channel,
-          location: tx.location,
-          zone: tx.zone
+          id: transaction.transactionId,
+          internalId: transaction.id,
+          date: transaction.timestamp
+            ? new Date(transaction.timestamp).toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              })
+            : 'N/A',
+          status: transaction.status || 'pending',
+          type: transaction.type || 'unknown',
+          channel: transaction.channel || 'N/A',
+          location: transaction.location || 'N/A',
+          zone: transaction.zone || 'N/A'
         },
         customer: {
-          name: tx.customer_name || 'N/A',
-          account: tx.customer_account || 'N/A',
-          phone: tx.customer_phone || 'N/A'
+          name: transaction.customerName || 'Unknown Customer',
+          account: formatAccountNumber(transaction.customerAccount),
+          phone: transaction.customerPhone || 'N/A'
         },
         agent: {
-          id: tx.agent_id,
-          name: tx.agent_name,
-          account: tx.agent_account,
-          type: tx.agent_type,
-          branch: tx.agent_branch,
-          parentAgent: tx.parent_agent_name
+          id: transaction.agentId,
+          name: transaction.agentName,
+          account: transaction.agent?.accountNumber || 'N/A',
+          type: transaction.agent?.type || 'local_agent',
+          branch: transaction.agent?.branchName || transaction.location || 'N/A',
+          parentAgent: transaction.agent?.parentAgent
             ? {
-                name: tx.parent_agent_name,
-                account: tx.parent_agent_account
+                name: transaction.agent.parentAgent.name,
+                account: transaction.agent.parentAgent.accountNumber
               }
             : null
         },
         financial: {
-          amount: tx.amount,
-          fee: tx.fee || 0,
-          netAmount: tx.net_amount || tx.amount,
-          commissionAmount: tx.commission_amount || 0,
-          commissionEligible: tx.commission_eligible
+          amount: transaction.amount || 0,
+          fee: transaction.fee || 0,
+          netAmount: transaction.netAmount || transaction.amount || 0,
+          commissionAmount: transaction.commissionAmount || 0,
+          commissionEligible: transaction.commissionEligible === 1
         },
         details: {
-          narration: tx.narration || 'N/A',
-          reference: tx.reference || 'N/A',
-          initiatedBy: tx.initiated_by || 'customer'
+          narration: transaction.narration || 'N/A',
+          reference: transaction.reference || 'N/A',
+          initiatedBy: transaction.initiatedBy || 'customer'
         },
         commissionBreakdown,
-        relatedTransactions: relatedTransactions.map((rt: any) => ({
+        relatedTransactions: relatedTransactions.map(rt => ({
           id: rt.id,
-          agent: rt.agent_name,
-          account: rt.agent_account,
-          amount: rt.amount,
-          commission: rt.commission_amount || 0
+          agent: rt.agentName,
+          account: rt.customerAccount || 'N/A',
+          amount: rt.amount || 0,
+          commission: rt.commissionAmount || 0
         })),
         metadata: {
-          createdAt: tx.created_at,
-          updatedAt: tx.updated_at
+          createdAt: transaction.createdAt?.toISOString() || new Date().toISOString(),
+          updatedAt: transaction.updatedAt?.toISOString() || new Date().toISOString()
         }
       }
 
