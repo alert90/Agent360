@@ -1,6 +1,17 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
-import { Box, Typography, Button, Alert, Paper, List, ListItem, ListItemText, ListItemIcon } from '@mui/material'
+import {
+  Box,
+  Typography,
+  Button,
+  Alert,
+  Paper,
+  List,
+  ListItem,
+  ListItemText,
+  ListItemIcon,
+  LinearProgress
+} from '@mui/material'
 import Icon from 'src/@core/components/icon'
 import StreamingFileUpload from 'src/components/StreamingFileUpload'
 import TransactionUploadWizard, { TransactionUploadStep } from 'src/components/TransactionUploadWizard'
@@ -20,6 +31,13 @@ const TransactionUpload: React.FC = () => {
   const [uploadResult, setUploadResult] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [stats, setStats] = useState<UploadStats | null>(null)
+  const [uploadProgress, setUploadProgress] = useState(0)
+
+  // Handle file selection to move to next step
+  const handleFileSelected = () => {
+    setActiveStep(1) // Move to Upload & Process step
+    setLoading(true)
+  }
 
   const handleUploadComplete = (result: any) => {
     setLoading(false)
@@ -34,8 +52,12 @@ const TransactionUpload: React.FC = () => {
         newTransactions: result.stats?.created || 0,
         errors: result.errors || []
       })
-      setActiveStep(3)
+      setActiveStep(2) // Move to Review Results step
     }
+  }
+
+  const handleUploadProgress = (progress: number) => {
+    setUploadProgress(progress)
   }
 
   const handleError = (error: string) => {
@@ -48,10 +70,15 @@ const TransactionUpload: React.FC = () => {
     setUploadResult(null)
     setStats(null)
     setLoading(false)
+    setUploadProgress(0)
   }
 
   const handleViewTransactions = () => {
     router.push('/transactions/list')
+  }
+
+  const handleUploadAnother = () => {
+    handleReset()
   }
 
   const handleDownloadTemplate = () => {
@@ -114,34 +141,14 @@ const TransactionUpload: React.FC = () => {
           </Typography>
           <Box sx={{ mt: 4 }}>
             <StreamingFileUpload
+              onUploadStart={handleFileSelected}
               onUploadComplete={handleUploadComplete}
+              onUploadProgress={handleUploadProgress}
               onError={handleError}
               acceptedFileTypes={['.csv']}
               maxFileSize={500 * 1024 * 1024}
             />
           </Box>
-        </Box>
-      )
-    },
-    {
-      title: 'Preview Data',
-      icon: 'tabler:eye',
-      content: (
-        <Box sx={{ textAlign: 'center', py: 6 }}>
-          <Box sx={{ mb: 2 }}>
-            <Icon icon='tabler:eye' fontSize={64} color='info' />
-          </Box>
-          <Typography variant='h6' gutterBottom>
-            Preview Transaction Data
-          </Typography>
-          <Typography variant='body2' color='text.secondary' sx={{ mb: 4 }}>
-            Review your data before uploading
-          </Typography>
-          <Alert severity='info' sx={{ mb: 4 }}>
-            <Typography variant='body2'>
-              The system will automatically create agents from the AGNTACCNT field
-            </Typography>
-          </Alert>
         </Box>
       )
     },
@@ -156,13 +163,23 @@ const TransactionUpload: React.FC = () => {
           <Typography variant='h6' gutterBottom>
             Uploading & Processing
           </Typography>
-          <Typography variant='body2' color='text.secondary' sx={{ mb: 4 }}>
-            Your file is being processed
+          <Typography variant='body2' color='text.secondary' sx={{ mb: 2 }}>
+            Please wait while your file is being processed
           </Typography>
+
           {loading && (
-            <Box sx={{ mt: 4 }}>
-              <Typography variant='body2' color='primary'>
-                Processing transactions...
+            <Box sx={{ mt: 4, maxWidth: 500, mx: 'auto' }}>
+              <LinearProgress variant='determinate' value={uploadProgress} sx={{ height: 8, borderRadius: 4, mb: 2 }} />
+              <Typography variant='body2' color='text.secondary'>
+                {uploadProgress < 30
+                  ? 'Parsing CSV file...'
+                  : uploadProgress < 80
+                  ? 'Uploading transactions...'
+                  : 'Finalizing...'}{' '}
+                ({Math.round(uploadProgress)}%)
+              </Typography>
+              <Typography variant='caption' color='text.secondary' sx={{ mt: 2, display: 'block' }}>
+                This may take a few minutes depending on file size
               </Typography>
             </Box>
           )}
@@ -179,27 +196,60 @@ const TransactionUpload: React.FC = () => {
           </Typography>
           {stats && (
             <Paper sx={{ p: 4, mb: 4 }}>
-              <Typography variant='h6' color='success.main' gutterBottom>
-                Upload Complete!
-              </Typography>
-              <List>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 4 }}>
+                <Box
+                  sx={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: '50%',
+                    bgcolor: 'success.main',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <Icon icon='tabler:check' fontSize={24} color='white' />
+                </Box>
+                <Box>
+                  <Typography variant='h5' color='success.main' gutterBottom>
+                    Upload Complete!
+                  </Typography>
+                  <Typography variant='body2' color='text.secondary'>
+                    Your transactions have been successfully imported
+                  </Typography>
+                </Box>
+              </Box>
+
+              <List sx={{ bgcolor: 'grey.50', borderRadius: 2, p: 2 }}>
                 <ListItem>
                   <ListItemIcon>
                     <Icon icon='tabler:file-text' color='primary' />
                   </ListItemIcon>
-                  <ListItemText primary='Total Rows' secondary={stats.totalRows?.toLocaleString() || '0'} />
+                  <ListItemText
+                    primary='Total Rows'
+                    secondary={stats.totalRows?.toLocaleString() || '0'}
+                    secondaryTypographyProps={{ variant: 'h6', color: 'text.primary' }}
+                  />
                 </ListItem>
                 <ListItem>
                   <ListItemIcon>
                     <Icon icon='tabler:check' color='success' />
                   </ListItemIcon>
-                  <ListItemText primary='Created' secondary={stats.processedRows?.toLocaleString() || '0'} />
+                  <ListItemText
+                    primary='Successfully Created'
+                    secondary={stats.processedRows?.toLocaleString() || '0'}
+                    secondaryTypographyProps={{ variant: 'h6', color: 'success.main' }}
+                  />
                 </ListItem>
                 <ListItem>
                   <ListItemIcon>
                     <Icon icon='tabler:users' color='info' />
                   </ListItemIcon>
-                  <ListItemText primary='New Agents' secondary={stats.newAgents?.toLocaleString() || '0'} />
+                  <ListItemText
+                    primary='New Agents Created'
+                    secondary={stats.newAgents?.toLocaleString() || '0'}
+                    secondaryTypographyProps={{ variant: 'h6', color: 'info.main' }}
+                  />
                 </ListItem>
                 <ListItem>
                   <ListItemIcon>
@@ -208,16 +258,62 @@ const TransactionUpload: React.FC = () => {
                   <ListItemText
                     primary='Transactions Added'
                     secondary={stats.newTransactions?.toLocaleString() || '0'}
+                    secondaryTypographyProps={{ variant: 'h6', color: 'warning.main' }}
                   />
                 </ListItem>
+                {stats.failedRows > 0 && (
+                  <ListItem>
+                    <ListItemIcon>
+                      <Icon icon='tabler:alert-triangle' color='error' />
+                    </ListItemIcon>
+                    <ListItemText
+                      primary='Skipped/Failed'
+                      secondary={stats.failedRows?.toLocaleString() || '0'}
+                      secondaryTypographyProps={{ variant: 'h6', color: 'error.main' }}
+                    />
+                  </ListItem>
+                )}
               </List>
+
               {stats.errors && stats.errors.length > 0 && (
                 <Alert severity='warning' sx={{ mt: 4 }}>
-                  <Typography variant='h6' gutterBottom>
-                    {stats.errors.length} errors
+                  <Typography variant='subtitle2' gutterBottom>
+                    {stats.errors.length} errors occurred
                   </Typography>
+                  <Box sx={{ maxHeight: 150, overflow: 'auto' }}>
+                    {stats.errors.slice(0, 5).map((error, idx) => (
+                      <Typography key={idx} variant='caption' display='block' sx={{ mt: 1 }}>
+                        • {error.transaction ? `TXN ${error.transaction}: ` : ''}
+                        {error.error || error}
+                      </Typography>
+                    ))}
+                    {stats.errors.length > 5 && (
+                      <Typography variant='caption' color='text.secondary' sx={{ mt: 1, display: 'block' }}>
+                        And {stats.errors.length - 5} more errors...
+                      </Typography>
+                    )}
+                  </Box>
                 </Alert>
               )}
+
+              <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', mt: 4 }}>
+                <Button
+                  variant='contained'
+                  startIcon={<Icon icon='tabler:eye' />}
+                  onClick={handleViewTransactions}
+                  size='large'
+                >
+                  View Transactions
+                </Button>
+                <Button
+                  variant='outlined'
+                  startIcon={<Icon icon='tabler:upload' />}
+                  onClick={handleUploadAnother}
+                  size='large'
+                >
+                  Upload Another File
+                </Button>
+              </Box>
             </Paper>
           )}
         </Box>
@@ -232,14 +328,15 @@ const TransactionUpload: React.FC = () => {
       onStepChange={setActiveStep}
       onReset={handleReset}
       loading={loading}
+      hideStepNavigation={activeStep === 1} // Hide navigation during upload
       actionButtons={
         <Box sx={{ display: 'flex', gap: 2 }}>
           <Button variant='outlined' startIcon={<Icon icon='tabler:download' />} onClick={handleDownloadTemplate}>
             Download Template
           </Button>
-          {activeStep > 0 && (
-            <Button variant='outlined' startIcon={<Icon icon='tabler:eye' />} onClick={handleViewTransactions}>
-              View Transactions
+          {activeStep === 2 && (
+            <Button variant='contained' startIcon={<Icon icon='tabler:eye' />} onClick={handleViewTransactions}>
+              View All Transactions
             </Button>
           )}
         </Box>

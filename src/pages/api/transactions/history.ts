@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import { prisma } from 'src/lib/prisma'
+import { prisma } from '../../../lib/db'
 import jwt from 'jsonwebtoken'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -8,7 +8,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Verify JWT token
     const token = req.headers.authorization?.replace('Bearer ', '')
     if (!token) {
       return res.status(401).json({ message: 'Unauthorized' })
@@ -23,34 +22,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(401).json({ message: 'User not found' })
     }
 
-    const { search = '', page = 1, limit = 50, type = '', status = '', months = 3 } = req.query
+    const { search = '', page = 1, limit = 50, type = '', months = 3 } = req.query
 
     const offset = (Number(page) - 1) * Number(limit)
 
-    // Build where clause
     const whereClause: any = {}
 
-    // Apply role-based filtering
     if (user.role === 'agent') {
       whereClause.agentId = user.id
-    } else if (user.role === 'super_agent' || user.role === 'franchise' || user.role === 'local_agent') {
+    } else if (user.role === 'super_agent' || user.role === 'franchise') {
       const userAgents = await prisma.agent.findMany({
-        where: { parentAgentId: user.id },
+        where: { parentAgentId: user.id, isActive: 1 },
         select: { id: true }
       })
       if (userAgents.length > 0) {
         whereClause.agentId = { in: userAgents.map(a => a.id) }
       } else {
-        whereClause.id = -1 // No results
+        whereClause.id = -1
       }
     }
 
-    // Add date range filter
     const monthsAgo = new Date()
     monthsAgo.setMonth(monthsAgo.getMonth() - Number(months))
     whereClause.timestamp = { gte: monthsAgo }
 
-    // Add search filter
     if (search) {
       whereClause.OR = [
         { agentName: { contains: search as string, mode: 'insensitive' } },
@@ -60,17 +55,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ]
     }
 
-    // Add type filter
     if (type && type !== 'all') {
       whereClause.type = type
     }
 
-    // Add status filter
-    if (status && status !== 'all') {
-      whereClause.status = status
-    }
-
-    // Get transactions
     const [transactions, total] = await Promise.all([
       prisma.transaction.findMany({
         where: whereClause,
@@ -81,7 +69,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       prisma.transaction.count({ where: whereClause })
     ])
 
-    // Calculate statistics
     const stats = await prisma.transaction.aggregate({
       where: whereClause,
       _count: { id: true },
@@ -89,7 +76,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       _avg: { amount: true }
     })
 
-    // Get transaction type breakdown
     const typeBreakdown = await prisma.transaction.groupBy({
       by: ['type'],
       where: whereClause,
@@ -98,7 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       orderBy: { _sum: { amount: 'desc' } }
     })
 
-    // Format transactions for response
+    // Format transactions (removed status field)
     const formattedTransactions = transactions.map(t => ({
       id: t.id,
       transactionId: t.transactionId,
@@ -113,7 +99,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       netAmount: t.netAmount,
       commissionAmount: t.commissionAmount,
       commissionEligible: t.commissionEligible,
-      status: t.status,
       location: t.location,
       zone: t.zone,
       channel: t.channel,
@@ -135,17 +120,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       stats: {
         totalTransactions: stats._count.id || 0,
-        totalAmount: stats._sum.amount || 0,
-        totalCommission: stats._sum.commissionAmount || 0,
-        avgTransactionAmount: stats._avg.amount || 0,
+        totalAmount: Number(stats._sum.amount) || 0,
+        totalCommission: Number(stats._sum.commissionAmount) || 0,
+        avgTransactionAmount: Number(stats._avg.amount) || 0,
         period: `Last ${months} months`
       },
       breakdown: {
         byType: typeBreakdown.map(t => ({
           type: t.type,
           count: t._count.type,
-          totalAmount: t._sum.amount || 0,
-          totalCommission: t._sum.commissionAmount || 0
+          totalAmount: Number(t._sum.amount) || 0,
+          totalCommission: Number(t._sum.commissionAmount) || 0
         }))
       }
     })

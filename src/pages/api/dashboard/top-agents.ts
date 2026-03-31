@@ -1,8 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
-import jwt from 'jsonwebtoken'
-
-const db = new Database('agent360.db')
+import { prisma } from '../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -10,43 +7,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Get user from JWT token
-    const authHeader = req.headers.authorization
-    const token = authHeader?.replace('Bearer ', '') || req.cookies?.token
+    const { limit = '10' } = req.query
+    const limitNum = Math.min(parseInt(limit as string), 100)
 
-    if (!token) {
-      return res.status(401).json({ message: 'Authentication required' })
-    }
-
-    const decoded = jwt.verify(token, process.env.NEXT_PUBLIC_JWT_SECRET!) as { id: number }
-    const userStmt = db.prepare('SELECT * FROM users WHERE id = ? AND is_active = 1')
-    const user = userStmt.get(decoded.id) as any
-
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' })
-    }
-
-    const { limit = 10 } = req.query
-
-    // Get top performing agents with transaction data
-    const topAgentsQuery = `
+    const topAgents = await prisma.$queryRaw`
       SELECT
         a.id,
         a.name,
-        a.account_number,
-        a.branch_name,
-        COUNT(t.id) as transaction_count,
-        COALESCE(SUM(t.amount), 0) as total_amount,
-        COALESCE(SUM(t.commission_amount), 0) as commission_amount
-      FROM agents a
-      LEFT JOIN transactions t ON a.id = t.agent_id
-      WHERE a.is_active = 1
-      GROUP BY a.id, a.name, a.account_number, a.branch_name
-      ORDER BY total_amount DESC
-      LIMIT ?
+        a."accountNumber",
+        a."branchName",
+        COUNT(t.id)::integer as "transactionCount",
+        COALESCE(SUM(t."amount"), 0)::numeric as "totalAmount",
+        COALESCE(SUM(t."commissionAmount"), 0)::numeric as "commissionAmount"
+      FROM "agents" a
+      LEFT JOIN "transactions" t ON a.id = t."agentId"
+        AND t."timestamp" >= NOW() - INTERVAL '30 days'
+        AND t.status = 'completed'
+      WHERE a."isActive" = 1
+      GROUP BY a.id, a.name, a."accountNumber", a."branchName"
+      ORDER BY "totalAmount" DESC
+      LIMIT ${limitNum}
     `
-
-    const topAgents = db.prepare(topAgentsQuery).all(Number(limit))
 
     res.status(200).json({
       success: true,
@@ -59,7 +40,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: 'Failed to fetch top agents',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }

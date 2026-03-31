@@ -1,21 +1,35 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import { prisma } from 'src/lib/prisma'
+import { prisma } from '../../../../lib/db'
+import jwt from 'jsonwebtoken'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ message: 'Method not allowed' })
   }
 
-  const { id } = req.query
-
-  if (!id) {
-    return res.status(400).json({ message: 'Agent ID is required' })
+  const token = req.headers.authorization?.replace('Bearer ', '')
+  if (!token) {
+    return res.status(401).json({ message: 'Unauthorized' })
   }
 
-  const agentId = parseInt(id as string)
-
   try {
-    // First get the agent to check their type
+    const decoded = jwt.verify(token, process.env.NEXT_PUBLIC_JWT_SECRET!) as any
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.id }
+    })
+
+    if (!user) {
+      return res.status(401).json({ message: 'User not found' })
+    }
+
+    const { id } = req.query
+
+    if (!id) {
+      return res.status(400).json({ message: 'Agent ID is required' })
+    }
+
+    const agentId = parseInt(id as string)
+
     const agent = await prisma.agent.findUnique({
       where: { id: agentId }
     })
@@ -36,47 +50,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     }
 
-    // Query for assigned agents
-    const associatedAgents = await prisma.$queryRaw<
-      {
-        id: number
-        name: string
-        account_number: string
-        type: string
-        is_active: boolean
-        assigned_at: Date
-        total_transactions: bigint
-        total_amount: number
-      }[]
-    >`
-      SELECT
-        a."id",
-        a."name",
-        a."accountNumber" as account_number,
-        a."type",
-        a."isActive" as is_active,
-        a."createdAt" as assigned_at,  -- Using createdAt as proxy for assigned_at; adjust if there's a better field
-        COUNT(t."id") as total_transactions,
-        COALESCE(SUM(t."amount")::float, 0) as total_amount
-      FROM "agents" a
-      LEFT JOIN "transactions" t ON t."agentId" = a."id"
-      WHERE a."parentAgentId" = ${agentId}
-      GROUP BY a."id"
-      ORDER BY total_transactions DESC, total_amount DESC
-    `
+    // Get all child agents
+    const childAgents = await prisma.agent.findMany({
+      where: { parentAgentId: agentId, isActive: 1 },
+      select: {
+        id: true,
+        name: true,
+        accountNumber: true,
+        type: true,
+        isActive: true,
+        createdAt: true
+      }
+    })
 
-    // Map to match frontend interface (convert bigint to number)
-    const formattedAgents = associatedAgents.map(agent => ({
-      ...agent,
-      is_active: agent.is_active === 1, // Assuming isActive is stored as 1/0
-      total_transactions: Number(agent.total_transactions),
-      total_amount: agent.total_amount,
-      assigned_at: agent.assigned_at.toISOString()
-    }))
+    // Get transaction counts for each child agent
+    const associatedAgentsWithStats = await Promise.all(
+      childAgents.map(async child => {
+        const stats = await prisma.transaction.aggregate({
+          where: {
+            agentId: child.id,
+            status: 'completed'
+          },
+          _count: { id: true },
+          _sum: { amount: true }
+        })
+
+        return {
+          id: child.id,
+          name: child.name,
+          account_number: child.accountNumber,
+          type: child.type,
+          is_active: child.isActive === 1,
+          assigned_at: child.createdAt?.toISOString() || new Date().toISOString(),
+          total_transactions: stats._count.id || 0,
+          total_amount: stats._sum.amount || 0
+        }
+      })
+    )
+
+    // Sort by total transactions descending
+    associatedAgentsWithStats.sort((a, b) => b.total_transactions - a.total_transactions)
 
     res.status(200).json({
       success: true,
-      data: formattedAgents
+      data: associatedAgentsWithStats
     })
   } catch (error) {
     console.error('Error fetching associated agents:', error)

@@ -1,4 +1,3 @@
-// ** React Imports
 import { useState, useEffect } from 'react'
 
 // ** MUI Components
@@ -15,9 +14,6 @@ import CustomTextField from 'src/@core/components/mui/text-field'
 import axios from 'axios'
 import { format } from 'date-fns'
 
-// ** Types Imports
-import { ThemeColor } from 'src/@core/layouts/types'
-
 interface TransactionRowType {
   id: number
   transactionId: string
@@ -25,31 +21,12 @@ interface TransactionRowType {
   customerName: string
   type: string
   amount: number
-  status: string
   zone: string
   timestamp: string
 }
 
 interface CellType {
   row: TransactionRowType
-}
-
-// ** renders status column
-const renderStatus = (status: string) => {
-  let color: ThemeColor = 'secondary'
-  if (status === 'completed') color = 'success'
-  else if (status === 'pending') color = 'warning'
-  else if (status === 'failed') color = 'error'
-
-  return (
-    <Chip
-      label={status.toUpperCase()}
-      color={color}
-      size='small'
-      variant='outlined'
-      sx={{ fontSize: '0.75rem', fontWeight: 500 }}
-    />
-  )
 }
 
 // ** renders amount column
@@ -106,13 +83,6 @@ const columns: GridColDef[] = [
     renderCell: ({ row }: CellType) => renderAmount(row.amount, row.type)
   },
   {
-    flex: 0.08,
-    field: 'status',
-    minWidth: 90,
-    headerName: 'Status',
-    renderCell: ({ row }: CellType) => renderStatus(row.status)
-  },
-  {
     flex: 0.1,
     field: 'zone',
     minWidth: 100,
@@ -159,8 +129,13 @@ const AnalyticsTransaction = () => {
         })
 
         if (response.data.success) {
-          // Transactions are already sorted from latest to oldest by the API
-          setData(response.data.data)
+          // Remove status from data if it exists
+          const cleanedData = response.data.data.map((item: any) => {
+            const { status, ...rest } = item
+
+            return rest
+          })
+          setData(cleanedData)
         } else {
           setData([])
         }

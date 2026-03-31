@@ -1,17 +1,12 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
-
-const db = new Database('agent360.db')
+import { prisma } from '../../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     try {
-      // Get all general settings grouped by category
-      const settingsStmt = db.prepare(`
-        SELECT * FROM general_settings
-        ORDER BY category, label
-      `)
-      const settings = settingsStmt.all() as any[]
+      const settings = await prisma.generalSetting.findMany({
+        orderBy: [{ category: 'asc' }, { label: 'asc' }]
+      })
 
       // Group by category
       const groupedSettings: Record<string, any[]> = {}
@@ -19,7 +14,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!groupedSettings[setting.category]) {
           groupedSettings[setting.category] = []
         }
-        groupedSettings[setting.category].push(setting)
+        groupedSettings[setting.category].push({
+          id: setting.id,
+          settingKey: setting.settingKey,
+          settingValue: setting.settingValue,
+          settingType: setting.settingType,
+          category: setting.category,
+          label: setting.label,
+          description: setting.description,
+          isRequired: setting.isRequired === 1,
+          validationRules: setting.validationRules
+        })
       }
 
       res.status(200).json(groupedSettings)
@@ -36,22 +41,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: 'Missing required fields' })
       }
 
-      const insertStmt = db.prepare(`
-        INSERT OR REPLACE INTO general_settings
-        (setting_key, setting_value, setting_type, category, label, description, is_required, validation_rules, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      `)
-
-      insertStmt.run(
-        settingKey,
-        settingValue,
-        settingType,
-        category,
-        label,
-        description,
-        isRequired ? 1 : 0,
-        validationRules
-      )
+      await prisma.generalSetting.upsert({
+        where: { settingKey },
+        update: {
+          settingValue,
+          settingType,
+          category,
+          label,
+          description,
+          isRequired: isRequired ? 1 : 0,
+          validationRules,
+          updatedAt: new Date()
+        },
+        create: {
+          settingKey,
+          settingValue,
+          settingType,
+          category,
+          label,
+          description,
+          isRequired: isRequired ? 1 : 0,
+          validationRules
+        }
+      })
 
       res.status(200).json({ message: 'Setting updated successfully' })
     } catch (error) {
@@ -66,19 +78,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: 'Settings must be an array' })
       }
 
-      const updateStmt = db.prepare(`
-        UPDATE general_settings
-        SET setting_value = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE setting_key = ?
-      `)
-
-      const transaction = db.transaction(() => {
-        for (const setting of settings) {
-          updateStmt.run(setting.value, setting.key)
-        }
-      })
-
-      transaction()
+      // Update each setting
+      for (const setting of settings) {
+        await prisma.generalSetting.update({
+          where: { settingKey: setting.key },
+          data: {
+            settingValue: setting.value,
+            updatedAt: new Date()
+          }
+        })
+      }
 
       res.status(200).json({ message: 'Settings updated successfully' })
     } catch (error) {

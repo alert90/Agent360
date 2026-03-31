@@ -11,13 +11,15 @@ import authConfig from 'src/configs/auth'
 // import authService from 'src/services/authService' // Removed to avoid client-side database imports
 
 // ** Types
-import { AuthValuesType, LoginParams, ErrCallbackType, UserDataType } from './types'
+import { AuthValuesType, LoginParams, ErrCallbackType, UserDataType, AgentDataType } from './types'
 
 // ** Defaults
 const defaultProvider: AuthValuesType = {
   user: null,
+  agentData: null,
   loading: true,
   setUser: () => null,
+  setAgentData: () => null,
   setLoading: () => Boolean,
   login: () => Promise.resolve(),
   logout: () => Promise.resolve()
@@ -32,6 +34,7 @@ type Props = {
 const AuthProvider = ({ children }: Props) => {
   // ** States
   const [user, setUser] = useState<UserDataType | null>(defaultProvider.user)
+  const [agentData, setAgentData] = useState<AgentDataType | null>(defaultProvider.agentData)
   const [loading, setLoading] = useState<boolean>(defaultProvider.loading)
 
   // ** Hooks
@@ -61,6 +64,11 @@ const AuthProvider = ({ children }: Props) => {
           if (response.ok && data.userData) {
             setLoading(false)
             setUser(data.userData as UserDataType)
+
+            // Set agent data if available
+            if (data.agentData) {
+              setAgentData(data.agentData as AgentDataType)
+            }
           } else {
             localStorage.removeItem('userData')
             localStorage.removeItem('refreshToken')
@@ -92,6 +100,8 @@ const AuthProvider = ({ children }: Props) => {
 
   const handleLogin = async (params: LoginParams, errorCallback?: ErrCallbackType) => {
     try {
+      console.log('🔐 Attempting login with:', params.email)
+
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: {
@@ -100,28 +110,45 @@ const AuthProvider = ({ children }: Props) => {
         body: JSON.stringify(params)
       })
 
+      console.log('📡 Response status:', response.status)
       const data = await response.json()
+      console.log('📦 Response data:', {
+        hasToken: !!data.accessToken,
+        hasUserData: !!data.userData,
+        userRole: data.userData?.role,
+        error: data.error
+      })
 
       if (!response.ok) {
+        console.log('❌ Login failed:', data.error)
         throw new Error(data.error?.email?.[0] || 'Login failed')
       }
 
-      params.rememberMe ? window.localStorage.setItem(authConfig.storageTokenKeyName, data.accessToken) : null
+      if (params.rememberMe) {
+        window.localStorage.setItem(authConfig.storageTokenKeyName, data.accessToken)
+        console.log('💾 Token saved to localStorage')
+      }
 
       setUser(data.userData as UserDataType)
+      if (data.agentData) {
+        setAgentData(data.agentData as AgentDataType)
+      }
 
-      params.rememberMe ? window.localStorage.setItem('userData', JSON.stringify(data.userData)) : null
+      if (params.rememberMe) {
+        window.localStorage.setItem('userData', JSON.stringify(data.userData))
+      }
 
-      // Redirect to role-specific dashboard
-      const redirectURL = '/dashboard' // Let's dashboard root handle redirection
-      router.replace(redirectURL)
+      console.log('✅ Login successful, redirecting...')
+      router.replace('/dashboard')
     } catch (err) {
+      console.error('❌ Login error in handleLogin:', err)
       if (errorCallback) errorCallback(err as { [key: string]: string })
     }
   }
 
   const handleLogout = () => {
     setUser(null)
+    setAgentData(null)
     window.localStorage.removeItem('userData')
     window.localStorage.removeItem(authConfig.storageTokenKeyName)
     router.push('/login')
@@ -129,8 +156,10 @@ const AuthProvider = ({ children }: Props) => {
 
   const values = {
     user,
+    agentData,
     loading,
     setUser,
+    setAgentData,
     setLoading,
     login: handleLogin,
     logout: handleLogout

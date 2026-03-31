@@ -23,21 +23,35 @@ import Alert from '@mui/material/Alert'
 import Icon from 'src/@core/components/icon'
 
 interface Agent {
-  id: string
+  id: string | number
   name: string
-  account_number: string
+  accountNumber: string
+  account_number?: string
   type: string
-  is_active: boolean
-  parent_agent_id?: string
-  email?: string
-  phone?: string
-  contact?: string
+  isActive: boolean
+  is_active?: boolean
+  parentAgentId?: number | string | null
+  parent_agent_id?: number | string | null
+  email?: string | null
+  phone?: string | null
+  contact?: string | null
+  branchCode?: string | null
   branch_code?: string
+  branchName?: string | null
   branch_name?: string
-  region?: string
-  zone?: string
-  created_at: string
-  updated_at: string
+  region?: string | null
+  zone?: string | null
+  username?: string | null
+  role?: string | null
+  commissionEligible?: number | null
+  totalTransactionAmount?: number | null
+  transactionCount?: number | null
+  commissionAmount?: number | null
+  payband?: number | null
+  createdAt?: string | Date | null
+  created_at?: string
+  updatedAt?: string | Date | null
+  updated_at?: string
 }
 
 const AgentEdit = () => {
@@ -47,7 +61,23 @@ const AgentEdit = () => {
   const [agent, setAgent] = useState<Agent | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [formData, setFormData] = useState<Partial<Agent>>({})
+  const [formData, setFormData] = useState<{
+    name?: string
+    accountNumber?: string
+    account_number?: string
+    type?: string
+    isActive?: boolean
+    is_active?: boolean
+    email?: string | null
+    phone?: string | null
+    contact?: string | null
+    branchCode?: string | null
+    branch_code?: string
+    branchName?: string | null
+    branch_name?: string
+    region?: string | null
+    zone?: string | null
+  }>({})
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -74,7 +104,7 @@ const AgentEdit = () => {
     }
   }
 
-  const handleInputChange = (field: keyof Agent, value: any) => {
+  const handleInputChange = (field: string, value: any) => {
     setFormData(prev => ({
       ...prev,
       [field]: value
@@ -89,19 +119,19 @@ const AgentEdit = () => {
     setError(null)
 
     try {
-      // Ensure all required fields are included
+      // Map camelCase to snake_case for API and include all fields
       const updateData = {
         name: formData.name || agent.name,
-        account_number: formData.account_number || agent.account_number,
+        accountNumber: formData.accountNumber || agent.accountNumber || agent.account_number,
         type: formData.type || agent.type,
-        is_active: formData.is_active !== undefined ? formData.is_active : agent.is_active,
-        email: formData.email,
-        phone: formData.phone,
-        contact: formData.contact,
-        branch_code: formData.branch_code,
-        branch_name: formData.branch_name,
-        region: formData.region,
-        zone: formData.zone
+        isActive: formData.isActive !== undefined ? formData.isActive : agent.isActive || agent.is_active,
+        email: formData.email ?? agent.email,
+        phone: formData.phone ?? agent.phone,
+        contact: formData.contact ?? agent.contact,
+        branchCode: formData.branchCode ?? agent.branchCode ?? agent.branch_code,
+        branchName: formData.branchName ?? agent.branchName ?? agent.branch_name,
+        region: formData.region ?? agent.region,
+        zone: formData.zone ?? agent.zone
       }
 
       console.log('Sending update data:', updateData)
@@ -209,7 +239,7 @@ const AgentEdit = () => {
                 variant='outlined'
               />
               <Typography variant='body2' color='text.secondary'>
-                Account: {agent.account_number}
+                Account: {formData.accountNumber}
               </Typography>
             </Box>
           }
@@ -229,8 +259,8 @@ const AgentEdit = () => {
               <TextField
                 fullWidth
                 label='Account Number'
-                value={formData.account_number || ''}
-                onChange={e => handleInputChange('account_number', e.target.value)}
+                value={formData.accountNumber || formData.account_number || ''}
+                onChange={e => handleInputChange('accountNumber', e.target.value)}
                 margin='normal'
               />
             </Grid>
@@ -252,10 +282,12 @@ const AgentEdit = () => {
               <Box sx={{ display: 'flex', alignItems: 'center', mt: 2 }}>
                 <Typography sx={{ mr: 2 }}>Active Status:</Typography>
                 <Switch
-                  checked={formData.is_active || false}
-                  onChange={e => handleInputChange('is_active', e.target.checked)}
+                  checked={formData.isActive ?? formData.is_active ?? false}
+                  onChange={e => handleInputChange('isActive', e.target.checked)}
                 />
-                <Typography sx={{ ml: 2 }}>{formData.is_active ? 'Active' : 'Inactive'}</Typography>
+                <Typography sx={{ ml: 2 }}>
+                  {formData.isActive ?? formData.is_active ? 'Active' : 'Inactive'}
+                </Typography>
               </Box>
             </Grid>
             <Grid item xs={12} md={6}>
@@ -290,8 +322,8 @@ const AgentEdit = () => {
               <TextField
                 fullWidth
                 label='Branch Code'
-                value={formData.branch_code || ''}
-                onChange={e => handleInputChange('branch_code', e.target.value)}
+                value={formData.branchCode ?? formData.branch_code ?? ''}
+                onChange={e => handleInputChange('branchCode', e.target.value)}
                 margin='normal'
               />
             </Grid>
@@ -299,8 +331,8 @@ const AgentEdit = () => {
               <TextField
                 fullWidth
                 label='Branch Name'
-                value={formData.branch_name || ''}
-                onChange={e => handleInputChange('branch_name', e.target.value)}
+                value={formData.branchName ?? formData.branch_name ?? ''}
+                onChange={e => handleInputChange('branchName', e.target.value)}
                 margin='normal'
               />
             </Grid>
@@ -308,7 +340,7 @@ const AgentEdit = () => {
               <TextField
                 fullWidth
                 label='Region'
-                value={formData.region || ''}
+                value={formData.region ?? ''}
                 onChange={e => handleInputChange('region', e.target.value)}
                 margin='normal'
               />
@@ -317,7 +349,7 @@ const AgentEdit = () => {
               <TextField
                 fullWidth
                 label='Zone'
-                value={formData.zone || ''}
+                value={formData.zone ?? ''}
                 onChange={e => handleInputChange('zone', e.target.value)}
                 margin='normal'
               />

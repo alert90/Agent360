@@ -10,7 +10,7 @@ import Typography from '@mui/material/Typography'
 import PageHeader from 'src/@core/components/page-header'
 
 // ** Demo Components Imports
-import TableServerSide from 'src/views/table/data-grid/TablePerformance'
+import TablePerformance from 'src/views/table/data-grid/TablePerformance'
 
 const LinkStyled = styled(Link)(({ theme }) => ({
   textDecoration: 'none',
@@ -30,7 +30,7 @@ const AgentPerformance = () => {
         }
       />
       <Grid item xs={12}>
-        <TableServerSide />
+        <TablePerformance />
       </Grid>
     </Grid>
   )

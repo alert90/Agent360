@@ -6,7 +6,23 @@ export type LoginParams = {
   rememberMe?: boolean
 }
 
-export type UserRole = 'admin' | 'analyst' | 'super_agent' | 'franchise' | 'agent'
+export type UserRole = 'admin' | 'analyst' | 'rms' | 'super_agent' | 'franchise' | 'agent'
+
+export interface AgentDataType {
+  id: number
+  name: string
+  accountNumber: string
+  type: string
+  isActive: number
+  parentAgentId?: number | null
+  branchCode?: string | null
+  branchName?: string | null
+  region?: string | null
+  zone?: string | null
+  email?: string | null
+  phone?: string | null
+  contact?: string | null
+}
 
 export interface UserDataType {
   id: number
@@ -31,13 +47,16 @@ export interface UserDataType {
   performanceRating?: number
   joinDate?: string
   lastLogin?: string
+  accountNumber?: string | null
 }
 
 export type AuthValuesType = {
   loading: boolean
   logout: () => void
   user: UserDataType | null
+  agentData: AgentDataType | null
   setLoading: (value: boolean) => void
   setUser: (value: UserDataType | null) => void
+  setAgentData: (value: AgentDataType | null) => void
   login: (params: LoginParams, errorCallback?: ErrCallbackType) => void
 }

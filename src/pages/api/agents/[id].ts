@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import { prisma } from 'src/lib/prisma'
+import { prisma } from '../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'PUT') {
@@ -17,7 +17,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     if (req.method === 'GET') {
       const agent = await prisma.agent.findUnique({
-        where: { id: agentId }
+        where: { id: agentId },
+        include: {
+          parentAgent: {
+            select: {
+              id: true,
+              name: true,
+              accountNumber: true,
+              type: true
+            }
+          },
+          childAgents: {
+            where: { isActive: 1 },
+            take: 20,
+            select: {
+              id: true,
+              name: true,
+              accountNumber: true,
+              type: true,
+              isActive: true,
+              totalTransactionAmount: true,
+              transactionCount: true
+            }
+          }
+        }
       })
 
       if (!agent) {
@@ -27,19 +50,60 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })
       }
 
+      // Get recent transactions
+      const recentTransactions = await prisma.transaction.findMany({
+        where: { agentId: agent.id },
+        orderBy: { timestamp: 'desc' },
+        take: 10
+      })
+
+      // Get transaction stats
+      const transactionStats = await prisma.transaction.aggregate({
+        where: { agentId: agent.id },
+        _count: { id: true },
+        _sum: { amount: true, commissionAmount: true }
+      })
+
       // Transform to camelCase for frontend
       const transformedAgent = {
         id: agent.id,
         name: agent.name,
         accountNumber: agent.accountNumber,
         type: agent.type,
-        isActive: agent.isActive,
+        isActive: agent.isActive === 1,
         parentAgentId: agent.parentAgentId,
+        parentAgent: agent.parentAgent,
+        childAgents: agent.childAgents,
         email: agent.email,
         phone: agent.phone,
         contact: agent.contact,
-        address: null,
-        createdAt: agent.createdAt
+        branchCode: agent.branchCode,
+        branchName: agent.branchName,
+        region: agent.region,
+        zone: agent.zone,
+        username: agent.username,
+        role: agent.role,
+        commissionEligible: agent.commissionEligible === 1,
+        totalTransactionAmount: agent.totalTransactionAmount || 0,
+        transactionCount: agent.transactionCount || 0,
+        commissionAmount: agent.commissionAmount || 0,
+        payband: agent.payband || 1.0,
+        createdAt: agent.createdAt,
+        updatedAt: agent.updatedAt,
+        recentTransactions: recentTransactions.map(t => ({
+          id: t.id,
+          transactionId: t.transactionId,
+          customerName: t.customerName,
+          amount: t.amount,
+          type: t.type,
+          status: t.status,
+          timestamp: t.timestamp
+        })),
+        stats: {
+          totalTransactions: transactionStats._count.id || 0,
+          totalAmount: Number(transactionStats._sum?.amount || 0),
+          totalCommission: Number(transactionStats._sum?.commissionAmount || 0)
+        }
       }
 
       res.status(200).json({
@@ -50,7 +114,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { name, accountNumber, type, isActive, email, phone, contact, branchCode, branchName, region, zone } =
         req.body
 
-      // Validate required fields
       if (!name || name.trim() === '') {
         return res.status(400).json({
           success: false,
@@ -65,7 +128,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })
       }
 
-      // Check if agent exists
       const existingAgent = await prisma.agent.findUnique({
         where: { id: agentId }
       })
@@ -77,21 +139,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })
       }
 
-      // Update agent
       const updatedAgent = await prisma.agent.update({
         where: { id: agentId },
         data: {
           name,
           accountNumber,
-          type,
-          isActive: isActive ? 1 : 0,
+          type: type || existingAgent.type,
+          isActive: isActive !== undefined ? (isActive ? 1 : 0) : existingAgent.isActive,
           email,
           phone,
           contact,
-          branchCode,
-          branchName,
-          region,
-          zone,
+          branchCode: branchCode || existingAgent.branchCode,
+          branchName: branchName || existingAgent.branchName,
+          region: region || existingAgent.region,
+          zone: zone || existingAgent.zone,
           updatedAt: new Date()
         }
       })

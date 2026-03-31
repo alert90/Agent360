@@ -1,4 +1,4 @@
-import { NextApiRequest, NextApiResponse } from 'next'
+import { NextApiRequest, NextApiResponse } from 'next/types'
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
@@ -13,7 +13,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Get the notification event
     const event = await prisma.notificationEvent.findFirst({
-      where: { eventType, isActive: true },
+      where: { eventType, isActive: 1 },
       include: { recipients: true }
     })
 

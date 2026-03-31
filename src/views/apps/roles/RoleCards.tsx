@@ -1,10 +1,6 @@
-// ** React Imports
-import { useEffect, useState } from 'react'
-
-// ** Next Import
+// src/views/apps/roles/RoleCards.tsx
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
-
-// ** MUI Imports
 import Box from '@mui/material/Box'
 import Grid from '@mui/material/Grid'
 import Card from '@mui/material/Card'
@@ -12,7 +8,6 @@ import Table from '@mui/material/Table'
 import Button from '@mui/material/Button'
 import Avatar from '@mui/material/Avatar'
 import Dialog from '@mui/material/Dialog'
-import Tooltip from '@mui/material/Tooltip'
 import Checkbox from '@mui/material/Checkbox'
 import TableRow from '@mui/material/TableRow'
 import TableBody from '@mui/material/TableBody'
@@ -29,95 +24,205 @@ import DialogContent from '@mui/material/DialogContent'
 import TableContainer from '@mui/material/TableContainer'
 import FormControlLabel from '@mui/material/FormControlLabel'
 
-// ** Icon Imports
 import Icon from 'src/@core/components/icon'
-
-// ** Custom Component Import
 import CustomTextField from 'src/@core/components/mui/text-field'
 
-// ** Update card data to match your ACL roles
 interface CardDataType {
   title: string
+  role: string
   avatars: string[]
   totalUsers: number
+  description: string
 }
 
+// Updated roles based on ACL configuration
 const cardData: CardDataType[] = [
-  { totalUsers: 1, title: 'Administrator', avatars: ['1.png'] },
-  { totalUsers: 3, title: 'Analyst', avatars: ['2.png', '3.png', '4.png'] },
-  { totalUsers: 5, title: 'Super Agent', avatars: ['5.png', '6.png', '7.png', '8.png', '1.png'] },
+  {
+    totalUsers: 1,
+    title: 'Administrator',
+    role: 'admin',
+    avatars: ['1.png'],
+    description: 'Full system access with all permissions'
+  },
+  {
+    totalUsers: 3,
+    title: 'Analyst',
+    role: 'analyst',
+    avatars: ['2.png', '3.png', '4.png'],
+    description: 'Access to analytics, reports, and data insights'
+  },
+  {
+    totalUsers: 5,
+    title: 'Super Agent',
+    role: 'super_agent',
+    avatars: ['5.png', '6.png', '7.png', '8.png', '1.png'],
+    description: 'Manage local agents with performance-based commission structure'
+  },
   {
     totalUsers: 8,
     title: 'Franchise',
-    avatars: ['2.png', '3.png', '4.png', '5.png', '6.png', '7.png', '8.png', '1.png']
+    role: 'franchise',
+    avatars: ['2.png', '3.png', '4.png', '5.png', '6.png', '7.png', '8.png', '1.png'],
+    description: 'Manage agents with turnover-based commission structure'
   },
-  { totalUsers: 50, title: 'Agent', avatars: ['4.png', '5.png'] }
+  {
+    totalUsers: 50,
+    title: 'Regional Manager',
+    role: 'regional_manager',
+    avatars: ['4.png', '5.png'],
+    description: 'Manage regional operations and agent performance'
+  },
+  {
+    totalUsers: 150,
+    title: 'Agent',
+    role: 'agent',
+    avatars: ['4.png', '5.png'],
+    description: 'Basic access for transaction processing'
+  }
 ]
 
-// ** Update permissions to match your ACL subjects
-const rolesArr: string[] = [
-  'Dashboard',
-  'Analytics',
-  'Reports',
-  'Commissions',
-  'Agent Management',
-  'Customers',
-  'Transactions',
-  'User Management',
-  'System Management',
-  'Chat',
-  'Email',
-  'FAQ',
-  'Help Center',
-  'Calendar'
-]
+// Permissions organized by module based on ACL subjects
+const permissionsByModule = {
+  dashboard: ['read', 'export'],
+  analytics: ['read', 'analyze', 'export'],
+  reports: ['read', 'export', 'analyze'],
+  commissions: ['read', 'calculate', 'export'],
+  'agent-management': ['read', 'create', 'update', 'delete'],
+  customers: ['read', 'create', 'update'],
+  transactions: ['read', 'export', 'void'],
+  'user-management': ['read', 'create', 'update', 'delete'],
+  'system-management': ['read', 'configure'],
+  chat: ['read', 'send'],
+  email: ['read', 'send'],
+  faq: ['read', 'create', 'update'],
+  'help-center': ['read', 'create', 'update'],
+  calendar: ['read', 'create', 'update'],
+  super_agent: ['read', 'manage'],
+  franchise: ['read', 'manage'],
+  regional_manager: ['read', 'manage']
+}
 
-const RolesCards = () => {
-  // ** States
+const RoleCards = () => {
   const [open, setOpen] = useState<boolean>(false)
   const [dialogTitle, setDialogTitle] = useState<'Add' | 'Edit'>('Add')
-  const [selectedCheckbox, setSelectedCheckbox] = useState<string[]>([])
-  const [isIndeterminateCheckbox, setIsIndeterminateCheckbox] = useState<boolean>(false)
+  const [selectedRole, setSelectedRole] = useState<CardDataType | null>(null)
+  const [roleName, setRoleName] = useState('')
+  const [selectedPermissions, setSelectedPermissions] = useState<Record<string, string[]>>({})
+  const [usersCount, setUsersCount] = useState<Record<string, number>>({})
 
-  const handleClickOpen = () => setOpen(true)
+  // Fetch user counts from database
+  useEffect(() => {
+    const fetchUserCounts = async () => {
+      try {
+        const response = await fetch('/api/users/count-by-role')
+        if (response.ok) {
+          const data = await response.json()
+          setUsersCount(data)
+        }
+      } catch (error) {
+        console.error('Error fetching user counts:', error)
+      }
+    }
+
+    fetchUserCounts()
+  }, [])
+
+  const handleClickOpen = (role?: CardDataType) => {
+    if (role) {
+      setSelectedRole(role)
+      setRoleName(role.title)
+      setDialogTitle('Edit')
+      setSelectedPermissions({})
+    } else {
+      setSelectedRole(null)
+      setRoleName('')
+      setDialogTitle('Add')
+      setSelectedPermissions({})
+    }
+    setOpen(true)
+  }
 
   const handleClose = () => {
     setOpen(false)
-    setSelectedCheckbox([])
-    setIsIndeterminateCheckbox(false)
+    setSelectedRole(null)
+    setSelectedPermissions({})
   }
 
-  const togglePermission = (id: string) => {
-    const arr = selectedCheckbox
-    if (selectedCheckbox.includes(id)) {
-      arr.splice(arr.indexOf(id), 1)
-      setSelectedCheckbox([...arr])
-    } else {
-      arr.push(id)
-      setSelectedCheckbox([...arr])
-    }
+  const togglePermission = (module: string, permission: string) => {
+    setSelectedPermissions(prev => {
+      const current = prev[module] || []
+      const updated = current.includes(permission) ? current.filter(p => p !== permission) : [...current, permission]
+
+      const newPermissions = { ...prev, [module]: updated }
+      if (updated.length === 0) {
+        delete newPermissions[module]
+      }
+
+      return newPermissions
+    })
   }
 
-  const handleSelectAllCheckbox = () => {
-    if (isIndeterminateCheckbox) {
-      setSelectedCheckbox([])
-    } else {
-      rolesArr.forEach(row => {
-        const id = row.toLowerCase().split(' ').join('-')
-        togglePermission(`${id}-read`)
-        togglePermission(`${id}-write`)
-        togglePermission(`${id}-create`)
+  const getModulePermissions = (module: string) => {
+    return permissionsByModule[module as keyof typeof permissionsByModule] || []
+  }
+
+  const handleSelectAllModule = (module: string) => {
+    const modulePermissions = getModulePermissions(module)
+    const currentPermissions = selectedPermissions[module] || []
+    const allSelected = modulePermissions.length > 0 && modulePermissions.every(p => currentPermissions.includes(p))
+
+    if (allSelected) {
+      setSelectedPermissions(prev => {
+        const newPerms = { ...prev }
+        delete newPerms[module]
+
+        return newPerms
       })
+    } else {
+      setSelectedPermissions(prev => ({
+        ...prev,
+        [module]: modulePermissions
+      }))
     }
   }
 
-  useEffect(() => {
-    if (selectedCheckbox.length > 0 && selectedCheckbox.length < rolesArr.length * 3) {
-      setIsIndeterminateCheckbox(true)
-    } else {
-      setIsIndeterminateCheckbox(false)
+  const isModuleFullySelected = (module: string) => {
+    const modulePermissions = getModulePermissions(module)
+    const currentPermissions = selectedPermissions[module] || []
+
+    return modulePermissions.length > 0 && modulePermissions.every(p => currentPermissions.includes(p))
+  }
+
+  const isModulePartiallySelected = (module: string) => {
+    const modulePermissions = getModulePermissions(module)
+    const currentPermissions = selectedPermissions[module] || []
+
+    return currentPermissions.length > 0 && currentPermissions.length < modulePermissions.length
+  }
+
+  const handleSaveRole = async () => {
+    try {
+      const response = await fetch('/api/roles', {
+        method: dialogTitle === 'Add' ? 'POST' : 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: roleName,
+          role: roleName.toLowerCase().replace(/\s+/g, '_'),
+          permissions: selectedPermissions,
+          ...(selectedRole && { id: selectedRole.role })
+        })
+      })
+
+      if (response.ok) {
+        handleClose()
+        window.location.reload()
+      }
+    } catch (error) {
+      console.error('Error saving role:', error)
     }
-  }, [selectedCheckbox])
+  }
 
   const renderCards = () =>
     cardData.map((item, index: number) => (
@@ -125,7 +230,9 @@ const RolesCards = () => {
         <Card>
           <CardContent>
             <Box sx={{ mb: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Typography sx={{ color: 'text.secondary' }}>{`Total ${item.totalUsers} users`}</Typography>
+              <Typography sx={{ color: 'text.secondary' }}>
+                {`Total ${usersCount[item.role] || item.totalUsers} users`}
+              </Typography>
               <AvatarGroup
                 max={4}
                 className='pull-up'
@@ -133,8 +240,8 @@ const RolesCards = () => {
                   '& .MuiAvatar-root': { width: 32, height: 32, fontSize: theme => theme.typography.body2.fontSize }
                 }}
               >
-                {item.avatars.map((img, index: number) => (
-                  <Avatar key={index} alt={item.title} src={`/images/avatars/${img}`} />
+                {item.avatars.map((img, idx: number) => (
+                  <Avatar key={idx} alt={item.title} src={`/images/avatars/${img}`} />
                 ))}
               </AvatarGroup>
             </Box>
@@ -143,14 +250,16 @@ const RolesCards = () => {
                 <Typography variant='h4' sx={{ mb: 1 }}>
                   {item.title}
                 </Typography>
+                <Typography variant='body2' sx={{ color: 'text.secondary', mb: 1 }}>
+                  {item.description}
+                </Typography>
                 <Typography
                   href='/'
                   component={Link}
                   sx={{ color: 'primary.main', textDecoration: 'none' }}
                   onClick={e => {
                     e.preventDefault()
-                    handleClickOpen()
-                    setDialogTitle('Edit')
+                    handleClickOpen(item)
                   }}
                 >
                   Edit Role
@@ -169,13 +278,7 @@ const RolesCards = () => {
     <Grid container spacing={6} className='match-height'>
       {renderCards()}
       <Grid item xs={12} sm={6} lg={4}>
-        <Card
-          sx={{ cursor: 'pointer' }}
-          onClick={() => {
-            handleClickOpen()
-            setDialogTitle('Add')
-          }}
-        >
+        <Card sx={{ cursor: 'pointer' }} onClick={() => handleClickOpen()}>
           <Grid container sx={{ height: '100%' }}>
             <Grid item xs={5}>
               <Box
@@ -193,14 +296,7 @@ const RolesCards = () => {
             <Grid item xs={7}>
               <CardContent sx={{ pl: 0, height: '100%' }}>
                 <Box sx={{ textAlign: 'right' }}>
-                  <Button
-                    variant='contained'
-                    sx={{ mb: 3, whiteSpace: 'nowrap' }}
-                    onClick={() => {
-                      handleClickOpen()
-                      setDialogTitle('Add')
-                    }}
-                  >
+                  <Button variant='contained' sx={{ mb: 3, whiteSpace: 'nowrap' }} onClick={() => handleClickOpen()}>
                     Add New Role
                   </Button>
                   <Typography sx={{ color: 'text.secondary' }}>Add role, if it doesn't exist.</Typography>
@@ -210,6 +306,7 @@ const RolesCards = () => {
           </Grid>
         </Card>
       </Grid>
+
       <Dialog fullWidth maxWidth='md' scroll='body' onClose={handleClose} open={open}>
         <DialogTitle
           component='div'
@@ -230,107 +327,69 @@ const RolesCards = () => {
         >
           <Box sx={{ my: 4 }}>
             <FormControl fullWidth>
-              <CustomTextField fullWidth label='Role Name' placeholder='Enter Role Name' />
+              <CustomTextField
+                fullWidth
+                label='Role Name'
+                placeholder='Enter Role Name'
+                value={roleName}
+                onChange={e => setRoleName(e.target.value)}
+              />
             </FormControl>
           </Box>
-          <Typography variant='h4'>Role Permissions</Typography>
+
+          <Typography variant='h4' sx={{ mb: 2 }}>
+            Role Permissions
+          </Typography>
+
           <TableContainer>
             <Table size='small'>
               <TableHead>
                 <TableRow>
                   <TableCell sx={{ pl: '0 !important' }}>
-                    <Box
-                      sx={{
-                        display: 'flex',
-                        whiteSpace: 'nowrap',
-                        alignItems: 'center',
-                        textTransform: 'capitalize',
-                        '& svg': { ml: 1, cursor: 'pointer' },
-                        color: theme => theme.palette.text.secondary,
-                        fontSize: theme => theme.typography.h6.fontSize
-                      }}
-                    >
-                      Administrator Access
-                      <Tooltip placement='top' title='Allows a full access to the system'>
-                        <Box sx={{ display: 'flex' }}>
-                          <Icon icon='tabler:info-circle' fontSize='1.25rem' />
-                        </Box>
-                      </Tooltip>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Typography variant='h6'>Module</Typography>
                     </Box>
                   </TableCell>
-                  <TableCell colSpan={3}>
-                    <FormControlLabel
-                      label='Select All'
-                      sx={{ '& .MuiTypography-root': { textTransform: 'capitalize', color: 'text.secondary' } }}
-                      control={
-                        <Checkbox
-                          size='small'
-                          onChange={handleSelectAllCheckbox}
-                          indeterminate={isIndeterminateCheckbox}
-                          checked={selectedCheckbox.length === rolesArr.length * 3}
-                        />
-                      }
-                    />
-                  </TableCell>
+                  <TableCell colSpan={4}>Permissions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {rolesArr.map((i: string, index: number) => {
-                  const id = i.toLowerCase().split(' ').join('-')
+                {Object.entries(permissionsByModule).map(([module, permissions]) => {
+                  const isFullySelected = isModuleFullySelected(module)
+                  const isPartiallySelected = isModulePartiallySelected(module)
 
                   return (
-                    <TableRow key={index} sx={{ '& .MuiTableCell-root:first-of-type': { pl: '0 !important' } }}>
-                      <TableCell
-                        sx={{
-                          fontWeight: 600,
-                          whiteSpace: 'nowrap',
-                          fontSize: theme => theme.typography.h6.fontSize
-                        }}
-                      >
-                        {i}
+                    <TableRow key={module}>
+                      <TableCell sx={{ fontWeight: 600, textTransform: 'capitalize' }}>
+                        {module.replace(/_/g, ' ')}
                       </TableCell>
                       <TableCell>
                         <FormControlLabel
-                          label='Read'
-                          sx={{ '& .MuiTypography-root': { color: 'text.secondary' } }}
+                          label='Select All'
                           control={
                             <Checkbox
                               size='small'
-                              id={`${id}-read`}
-                              onChange={() => togglePermission(`${id}-read`)}
-                              checked={selectedCheckbox.includes(`${id}-read`)}
+                              checked={isFullySelected}
+                              indeterminate={isPartiallySelected}
+                              onChange={() => handleSelectAllModule(module)}
                             />
                           }
                         />
                       </TableCell>
-                      <TableCell>
-                        <FormControlLabel
-                          label='Write'
-                          sx={{ '& .MuiTypography-root': { color: 'text.secondary' } }}
-                          control={
-                            <Checkbox
-                              size='small'
-                              id={`${id}-write`}
-                              onChange={() => togglePermission(`${id}-write`)}
-                              checked={selectedCheckbox.includes(`${id}-write`)}
-                            />
-                          }
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <FormControlLabel
-                          label='Create'
-                          sx={{ '& .MuiTypography-root': { color: 'text.secondary' } }}
-                          control={
-                            <Checkbox
-                              size='small'
-                              id={`${id}-create`}
-                              onChange={() => togglePermission(`${id}-create`)}
-                              checked={selectedCheckbox.includes(`${id}-create`)}
-                            />
-                          }
-                        />
-                      </TableCell>
+                      {permissions.map(permission => (
+                        <TableCell key={permission}>
+                          <FormControlLabel
+                            label={permission.charAt(0).toUpperCase() + permission.slice(1)}
+                            control={
+                              <Checkbox
+                                size='small'
+                                checked={(selectedPermissions[module] || []).includes(permission)}
+                                onChange={() => togglePermission(module, permission)}
+                              />
+                            }
+                          />
+                        </TableCell>
+                      ))}
                     </TableRow>
                   )
                 })}
@@ -347,8 +406,8 @@ const RolesCards = () => {
           }}
         >
           <Box className='demo-space-x'>
-            <Button type='submit' variant='contained' onClick={handleClose}>
-              Submit
+            <Button type='submit' variant='contained' onClick={handleSaveRole}>
+              Save Role
             </Button>
             <Button color='secondary' variant='tonal' onClick={handleClose}>
               Cancel
@@ -360,4 +419,4 @@ const RolesCards = () => {
   )
 }
 
-export default RolesCards
+export default RoleCards

@@ -1,33 +1,21 @@
-/* eslint-disable @typescript-eslint/no-var-requires */
-const path = require('path')
-
 /** @type {import('next').NextConfig} */
-
-// Remove this if you're not using Fullcalendar features
-
-module.exports = {
-  trailingSlash: true,
-  reactStrictMode: false,
-  experimental: {
-    serverComponentsExternalPackages: ['@mui/material', '@mui/icons-material']
+const nextConfig = {
+  reactStrictMode: true,
+  swcMinify: true,
+  env: {
+    DATABASE_URL: process.env.DATABASE_URL,
   },
-  webpack: config => {
-    config.resolve.alias = {
-      ...config.resolve.alias,
-      apexcharts: path.resolve(__dirname, './node_modules/apexcharts-clevision')
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      config.resolve.fallback = {
+        fs: false,
+        net: false,
+        tls: false,
+      }
     }
 
     return config
   },
-
-  // Add custom server configuration for larger file uploads
-  async rewrites() {
-    return [
-      // Handle large file uploads through custom middleware
-      {
-        source: '/api/files/upload-chunk',
-        destination: '/api/files/upload-chunk'
-      }
-    ]
-  }
 }
+
+module.exports = nextConfig

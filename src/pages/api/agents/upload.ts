@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import { prisma } from 'src/lib/prisma'
+import { prisma } from '../../../lib/db'
 import formidable from 'formidable'
 import fs from 'fs'
 import csv from 'csv-parser'

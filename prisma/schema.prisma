@@ -1,3 +1,5 @@
+// prisma/schema.prisma - COMPLETE FIXED VERSION
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -21,6 +23,7 @@ model User {
   address     String?
   zipCode     String?   @map("zip_code")
   avatar      String?
+  accountNumber String? @unique @map("account_number")
   createdAt   DateTime? @default(now()) @map("created_at")
   updatedAt   DateTime? @default(now()) @map("updated_at")
 
@@ -62,6 +65,11 @@ model Agent {
   // Relations
   parentAgent                 Agent?                      @relation("AgentHierarchy", fields: [parentAgentId], references: [id])
   childAgents                 Agent[]                     @relation("AgentHierarchy")
+
+  capitalAdvancedAsFranchise  CapitalAdvanced[]            @relation("franchiseToAgent")
+  capitalAdvancedAsAgent      CapitalAdvanced[]            @relation("agentFromFranchise")
+  superAgentKPIs              SuperAgentKPI[]
+  franchisePerformances       FranchisePerformance[]
   agentAssignmentsAsLocal     AgentAssignment[]           @relation("LocalAgent")
   agentAssignmentsAsSuper     AgentAssignment[]           @relation("SuperAgent")
   agentAssignmentsAsFranchise AgentAssignment[]           @relation("Franchise")
@@ -144,44 +152,24 @@ model CommissionConfig {
 }
 
 model Commission {
-  id        Int    @id @default(autoincrement())
-  agentId   Int    @map("agent_id")
-  agentName String @map("agent_name")
-  agentType String @map("agent_type")
-  period    String
+  id               Int      @id @default(autoincrement())
+  agentId          Int
+  agentName        String
+  agentType        String
+  period           String   // YYYY-MM
+  totalAmount      Float
+  transactionCount Int
+  eligibleAmount   Float
+  commissionRate   Float
+  commissionAmount Float
+  payband          Float
+  finalCommission  Float
+  clawback         Float    @default(0)
+  performance      String?  // JSON string
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  // Transaction Summary
-  transactionCount Int   @default(0) @map("transaction_count")
-  totalAmount      Float @default(0) @map("total_amount")
-
-  // Commission Details
-  eligibleAmount   Float @default(0) @map("eligible_amount")
-  commissionRate   Float @default(0) @map("commission_rate")
-  commissionAmount Float @default(0) @map("commission_amount")
-  payband          Float @default(0)
-  finalCommission  Float @default(0) @map("final_commission")
-
-  // KPI Scores
-  kpiActivenessScore   Float? @map("kpi_activeness_score")
-  kpiValueScore        Float? @map("kpi_value_score")
-  kpiUniqueAgentsScore Float? @map("kpi_unique_agents_score")
-  kpiTotalScore        Float? @map("kpi_total_score")
-
-  // Franchise Details
-  capitalAdvanced  Float? @map("capital_advanced")
-  expectedTurnover Float? @map("expected_turnover")
-  actualTurnover   Float? @map("actual_turnover")
-  performanceRatio Float? @map("performance_ratio")
-  clawbackAmount   Float? @default(0) @map("clawback_amount")
-
-  // Metadata
-  calculationDetails String?   @map("calculation_details")
-  status             String?   @default("calculated")
-  createdAt          DateTime? @default(now()) @map("created_at")
-  updatedAt          DateTime? @default(now()) @map("updated_at")
-
-  // Relations
-  agent Agent @relation(fields: [agentId], references: [id])
+  agent            Agent    @relation(fields: [agentId], references: [id])
 
   @@unique([agentId, period])
   @@map("commissions")
@@ -499,4 +487,73 @@ model UploadedFile {
   status       String
 
   @@map("uploaded_files")
+}
+
+model CommissionStructure {
+  id          Int      @id @default(autoincrement())
+  name        String
+  type        String   // 'SUPER_AGENT' or 'FRANCHISE'
+  description String?
+  config      String   // JSON string
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("commission_structures")
+}
+
+model CapitalAdvanced {
+  id            Int       @id @default(autoincrement())
+  franchiseId   Int       @map("franchise_id")
+  agentId       Int       @map("agent_id")
+  period        String
+  amount        Float
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime? @updatedAt
+
+  franchise     Agent     @relation("franchiseToAgent", fields: [franchiseId], references: [id])
+  agent         Agent     @relation("agentFromFranchise", fields: [agentId], references: [id])
+
+  @@unique([franchiseId, agentId, period])
+  @@map("capital_advanced")
+}
+
+model SuperAgentKPI {
+  id                     Int      @id @default(autoincrement())
+  superAgentId           Int      @map("super_agent_id")
+  period                 String
+  totalAgents            Int?
+  activeAgents           Int?
+  activenessScore        Float?   @map("activeness_score")
+  valueTransactedScore   Float?   @map("value_transacted_score")
+  uniqueAgentsScore      Float?   @map("unique_agents_score")
+  totalScore             Float?   @map("total_score")
+  kpiBand                Float?   @map("kpi_band")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime? @updatedAt
+
+  superAgent             Agent    @relation(fields: [superAgentId], references: [id])
+
+  @@unique([superAgentId, period])
+  @@map("super_agent_kpis")
+}
+
+model FranchisePerformance {
+  id                   Int     @id @default(autoincrement())
+  franchiseId          Int     @map("franchise_id")
+  period               String
+  totalCapitalAdvanced Float?  @map("total_capital_advanced")
+  expectedTurnover     Float?  @map("expected_turnover")
+  actualTurnover       Float?  @map("actual_turnover")
+  performancePct       Float?  @map("performance_pct")
+  paybandLevel         String? @map("payband_level")
+  apportionRate        Float?  @map("apportion_rate")
+  clawbackAmount       Float?  @map("clawback_amount")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime? @updatedAt
+
+  franchise            Agent    @relation(fields: [franchiseId], references: [id])
+
+  @@unique([franchiseId, period])
+  @@map("franchise_performances")
 }

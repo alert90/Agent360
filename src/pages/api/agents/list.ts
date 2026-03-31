@@ -1,10 +1,19 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import { prisma } from 'src/lib/prisma'
+import { prisma } from '../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     if (req.method === 'GET') {
-      const { search = '', page = 1, limit = 25, type = '', sortBy = 'createdAt', sortOrder = 'desc' } = req.query
+      const {
+        search = '',
+        page = 1,
+        limit = 25,
+        type = '',
+        sortBy = 'createdAt',
+        sortOrder = 'desc',
+        parentAgentId,
+        id
+      } = req.query
 
       const offset = (Number(page) - 1) * Number(limit)
 
@@ -23,6 +32,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Add type filter
       if (type && type !== '') {
         whereClause.type = type
+      }
+
+      // Add parentAgentId filter (for super_agent to get their child agents)
+      if (parentAgentId) {
+        whereClause.parentAgentId = Number(parentAgentId)
+      }
+
+      // Add specific agent ID filter
+      if (id) {
+        whereClause.id = Number(id)
       }
 
       // Validate sort column
@@ -75,9 +94,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Get unique types for filter
       const types = await prisma.agent.findMany({
-        where: {
-          type: { not: null, not: '' }
-        },
+        where: {},
         select: { type: true },
         distinct: ['type'],
         orderBy: { type: 'asc' }

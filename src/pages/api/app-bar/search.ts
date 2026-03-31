@@ -1,101 +1,119 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from '../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const db = new Database('agent360.db')
-
   try {
-    if (req.method === 'GET') {
-      const { q = '' } = req.query
-      const searchTerm = (q as string).toLowerCase().trim()
-
-      if (!searchTerm) {
-        return res.status(200).json([])
-      }
-
-      // Search agents by name or account number
-      const agentsQuery = `
-        SELECT
-          id,
-          name as title,
-          'agent' as category,
-          'tabler:users' as icon,
-          '/agents/view/' || id as url,
-          account_number as accountNumber
-        FROM agents
-        WHERE (name LIKE ? OR account_number LIKE ?)
-        AND is_active = 1
-        LIMIT 5
-      `
-      const agents = db.prepare(agentsQuery).all(`%${searchTerm}%`, `%${searchTerm}%`)
-
-      // Search transactions by customer name, transaction ID, account number, or narration
-      const transactionsQuery = `
-        SELECT DISTINCT
-          id,
-          customer_name || ' (' || transaction_id || ')' as title,
-          'transaction' as category,
-          'tabler:receipt' as icon,
-          '/transactions/' || id as url,
-          customer_name as customerName,
-          transaction_id as transactionId,
-          agent_id as agentId
-        FROM transactions
-        WHERE customer_name LIKE ? OR transaction_id LIKE ? OR narration LIKE ? OR customer_account LIKE ?
-        LIMIT 5
-      `
-      const transactions = db
-        .prepare(transactionsQuery)
-        .all(`%${searchTerm}%`, `%${searchTerm}%`, `%${searchTerm}%`, `%${searchTerm}%`)
-
-      // Add some static page suggestions
-      const staticSuggestions = [
-        {
-          id: 'dashboard',
-          title: 'Dashboard',
-          category: 'page',
-          icon: 'tabler:layout-dashboard',
-          url: '/dashboard/data-management'
-        },
-        {
-          id: 'agents',
-          title: 'Agents',
-          category: 'page',
-          icon: 'tabler:users',
-          url: '/agents/list'
-        },
-        {
-          id: 'commissions',
-          title: 'Commissions',
-          category: 'page',
-          icon: 'tabler:currency-dollar',
-          url: '/commission/report'
-        },
-        {
-          id: 'upload',
-          title: 'Upload Data',
-          category: 'page',
-          icon: 'tabler:upload',
-          url: '/streaming-upload-demo'
-        }
-      ]
-        .filter(item => item.title.toLowerCase().includes(searchTerm))
-        .slice(0, 3)
-
-      const results = [...agents, ...transactions, ...staticSuggestions]
-
-      res.status(200).json(results)
-    } else {
-      res.setHeader('Allow', ['GET'])
-      res.status(405).json({ message: 'Method not allowed' })
+    if (req.method !== 'GET') {
+      return res.status(405).json({ message: 'Method not allowed' })
     }
+
+    const { q = '' } = req.query
+    const searchTerm = (q as string).toLowerCase().trim()
+
+    if (!searchTerm) {
+      return res.status(200).json([])
+    }
+
+    // Search agents by name or account number
+    const agents = await prisma.agent.findMany({
+      where: {
+        isActive: 1,
+        OR: [
+          { name: { contains: searchTerm, mode: 'insensitive' } },
+          { accountNumber: { contains: searchTerm, mode: 'insensitive' } }
+        ]
+      },
+      take: 5,
+      select: {
+        id: true,
+        name: true,
+        accountNumber: true
+      }
+    })
+
+    const formattedAgents = agents.map(agent => ({
+      id: agent.id,
+      title: agent.name,
+      category: 'agent',
+      icon: 'tabler:users',
+      url: `/agents/view/${agent.id}`,
+      accountNumber: agent.accountNumber
+    }))
+
+    // Search transactions by customer name, transaction ID, account number, or narration
+    const transactions = await prisma.transaction.findMany({
+      where: {
+        OR: [
+          { customerName: { contains: searchTerm, mode: 'insensitive' } },
+          { transactionId: { contains: searchTerm, mode: 'insensitive' } },
+          { narration: { contains: searchTerm, mode: 'insensitive' } },
+          { customerAccount: { contains: searchTerm, mode: 'insensitive' } }
+        ]
+      },
+      take: 5,
+      distinct: ['customerName', 'transactionId'],
+      select: {
+        id: true,
+        customerName: true,
+        transactionId: true,
+        narration: true,
+        agentId: true
+      }
+    })
+
+    const formattedTransactions = transactions.map(t => ({
+      id: t.id,
+      title: `${t.customerName || 'Unknown'} (${t.transactionId})`,
+      category: 'transaction',
+      icon: 'tabler:receipt',
+      url: `/transactions/${t.id}`,
+      customerName: t.customerName,
+      transactionId: t.transactionId,
+      agentId: t.agentId
+    }))
+
+    // Static page suggestions
+    const staticSuggestions = [
+      {
+        id: 'dashboard',
+        title: 'Dashboard',
+        category: 'page',
+        icon: 'tabler:layout-dashboard',
+        url: '/dashboard/data-management'
+      },
+      {
+        id: 'agents',
+        title: 'Agents',
+        category: 'page',
+        icon: 'tabler:users',
+        url: '/agents/list'
+      },
+      {
+        id: 'commissions',
+        title: 'Commissions',
+        category: 'page',
+        icon: 'tabler:currency-dollar',
+        url: '/commission/report'
+      },
+      {
+        id: 'upload',
+        title: 'Upload Data',
+        category: 'page',
+        icon: 'tabler:upload',
+        url: '/streaming-upload-demo'
+      }
+    ]
+      .filter(item => item.title.toLowerCase().includes(searchTerm))
+      .slice(0, 3)
+
+    const results = [...formattedAgents, ...formattedTransactions, ...staticSuggestions]
+
+    res.status(200).json(results)
   } catch (error) {
     console.error('App bar search API error:', error)
     res.status(500).json({
       message: 'Failed to perform search',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }

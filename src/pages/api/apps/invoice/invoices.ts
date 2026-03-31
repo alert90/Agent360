@@ -1,75 +1,49 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from '../../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ message: 'Method not allowed' })
   }
 
-  const db = new Database('agent360.db')
-
   try {
-    // Get transactions from database to serve as "invoices"
-    const transactions = db
-      .prepare(
-        `
-      SELECT
-        t.id,
-        t.transaction_id as invoiceNumber,
-        t.agent_name as clientName,
-        t.customer_name as customerName,
-        t.customer_phone as customerPhone,
-        t.customer_account as customerAccount,
-        t.type as service,
-        t.amount as total,
-        t.fee as tax,
-        t.net_amount as balance,
-        t.status,
-        t.location,
-        t.zone,
-        t.channel,
-        t.narration as description,
-        t.reference,
-        t.initiated_by as issuedBy,
-        t.timestamp as invoiceDate,
-        t.created_at as createdAt,
-        a.account_number as agentAccount,
-        a.branch_name as branchName
-      FROM transactions t
-      LEFT JOIN agents a ON t.agent_id = a.id
-      ORDER BY t.timestamp DESC
-      LIMIT 100
-    `
-      )
-      .all()
+    const transactions = await prisma.transaction.findMany({
+      take: 100,
+      orderBy: { timestamp: 'desc' },
+      include: {
+        agent: {
+          select: {
+            accountNumber: true,
+            branchName: true
+          }
+        }
+      }
+    })
 
-    // Transform data to match expected invoice format
-    const invoices = transactions.map((transaction: any) => ({
+    const invoices = transactions.map(transaction => ({
       id: transaction.id,
-      invoiceNumber: transaction.invoiceNumber,
-      clientName: transaction.clientName,
+      invoiceNumber: transaction.transactionId,
+      clientName: transaction.agentName,
       customerName: transaction.customerName,
       customerPhone: transaction.customerPhone,
       customerAccount: transaction.customerAccount,
-      service: transaction.service,
-      total: transaction.total,
-      tax: transaction.tax,
-      balance: transaction.balance,
+      service: transaction.type,
+      total: transaction.amount,
+      tax: transaction.fee || 0,
+      balance: transaction.netAmount || transaction.amount,
       status: transaction.status === 'completed' ? 'Paid' : 'Pending',
       location: transaction.location,
       zone: transaction.zone,
       channel: transaction.channel,
-      description: transaction.description,
+      description: transaction.narration,
       reference: transaction.reference,
-      issuedBy: transaction.issuedBy,
-      invoiceDate: transaction.invoiceDate,
+      issuedBy: transaction.initiatedBy,
+      invoiceDate: transaction.timestamp,
       createdAt: transaction.createdAt,
-      agentAccount: transaction.agentAccount,
-      branchName: transaction.branchName,
-
-      // Additional invoice fields
-      dueDate: transaction.invoiceDate, // Same as invoice date for simplicity
-      avatar: '', // Could add client avatar later
+      agentAccount: transaction.agent?.accountNumber,
+      branchName: transaction.agent?.branchName,
+      dueDate: transaction.timestamp,
+      avatar: '',
       avatarColor: 'primary',
       invoiceStatus: transaction.status === 'completed' ? 'Paid' : 'Pending'
     }))
@@ -82,7 +56,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: 'Failed to fetch invoices',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }

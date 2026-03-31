@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next/types'
-import { prisma } from 'src/lib/prisma'
+import { prisma } from '../../../lib/db'
 import jwt from 'jsonwebtoken'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -40,13 +40,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       address: user.address,
       zipCode: user.zipCode,
       avatar: user.avatar,
+      accountNumber: user.accountNumber,
       isActive: user.isActive,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
     }
 
+    // If user has accountNumber, also fetch the linked agent data
+    let agentData = null
+    if (user.accountNumber) {
+      try {
+        const agent = await prisma.agent.findUnique({
+          where: { accountNumber: user.accountNumber }
+        })
+        if (agent) {
+          agentData = {
+            id: agent.id,
+            name: agent.name,
+            accountNumber: agent.accountNumber,
+            type: agent.type,
+            isActive: agent.isActive,
+            parentAgentId: agent.parentAgentId,
+            branchCode: agent.branchCode,
+            branchName: agent.branchName,
+            region: agent.region,
+            zone: agent.zone,
+            email: agent.email,
+            phone: agent.phone,
+            contact: agent.contact
+          }
+        }
+      } catch (agentError) {
+        console.error('Error fetching agent data:', agentError)
+      }
+    }
+
     return res.status(200).json({
-      userData: userWithoutPassword
+      userData: userWithoutPassword,
+      agentData
     })
   } catch (error) {
     console.error('Token verification error:', error)

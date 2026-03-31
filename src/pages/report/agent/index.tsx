@@ -86,7 +86,8 @@ const AgentReport = () => {
         const matchesStatus = selectedStatus === 'all' ||
           (selectedStatus === 'active' && agent.is_active) ||
           (selectedStatus === 'inactive' && !agent.is_active)
-        return matchesSearch && matchesType && matchesStatus
+        
+return matchesSearch && matchesType && matchesStatus
       })
       .sort((a, b) => {
         switch (sortBy) {

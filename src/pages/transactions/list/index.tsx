@@ -26,22 +26,6 @@ import Icon from 'src/@core/components/icon'
 import { useAuth } from 'src/hooks/useAuth'
 import type { SelectChangeEvent } from '@mui/material'
 
-// ** Styled Components
-const StyledChip = styled(Chip)(({ theme }) => ({
-  '&.completed': {
-    backgroundColor: theme.palette.success.main,
-    color: theme.palette.common.white
-  },
-  '&.pending': {
-    backgroundColor: theme.palette.warning.main,
-    color: theme.palette.common.white
-  },
-  '&.failed': {
-    backgroundColor: theme.palette.error.main,
-    color: theme.palette.common.white
-  }
-}))
-
 interface TransactionStats {
   totalTransactions: number
   totalAmount: number
@@ -63,7 +47,6 @@ const TransactionList = () => {
   const [filters, setFilters] = useState({
     search: '',
     type: 'all',
-    status: 'all',
     startDate: '',
     endDate: '',
     sortBy: 'timestamp',
@@ -90,7 +73,6 @@ const TransactionList = () => {
         limit: pageSize.toString(),
         search: newFilters.search,
         type: newFilters.type,
-        status: newFilters.status,
         sortBy: 'timestamp',
         sortOrder: 'desc'
       })
@@ -154,7 +136,7 @@ const TransactionList = () => {
   }
 
   const handleExport = () => {
-    // Export to CSV
+    // Export to CSV (removed status column)
     const headers = [
       'Transaction ID',
       'Agent Name',
@@ -162,7 +144,6 @@ const TransactionList = () => {
       'Type',
       'Amount',
       'Commission',
-      'Status',
       'Date',
       'Location'
     ]
@@ -174,7 +155,6 @@ const TransactionList = () => {
       tx.type || '',
       tx.amount || 0,
       tx.commissionAmount || 0,
-      tx.status || '',
       tx.timestamp || '',
       tx.location || ''
     ])
@@ -202,7 +182,7 @@ const TransactionList = () => {
     fetchTransactions(0, pagination.pageSize, updatedFilters)
   }
 
-  // Transaction columns for data table
+  // Transaction columns for data table (removed status column)
   const columns: GridColDef[] = [
     {
       field: 'transactionId',
@@ -291,6 +271,8 @@ const TransactionList = () => {
       )
     },
     {
+      field: 'commissionAmount',
+      headerName: 'Commission',
       type: 'number',
       minWidth: 120,
       renderCell: ({ row }) => (
@@ -298,29 +280,6 @@ const TransactionList = () => {
           {formatCurrency(row.commissionAmount || 0)}
         </Typography>
       )
-    },
-    {
-      field: 'status',
-      headerName: 'Status',
-      minWidth: 100,
-      renderCell: ({ row }) => {
-        const statusColors: Record<string, any> = {
-          completed: 'success',
-          pending: 'warning',
-          failed: 'error',
-          cancelled: 'secondary'
-        }
-        const color = statusColors[row.status] || 'default'
-
-        return (
-          <Chip
-            label={row.status?.toUpperCase() || 'UNKNOWN'}
-            size='small'
-            color={color}
-            sx={{ textTransform: 'capitalize' }}
-          />
-        )
-      }
     },
     {
       field: 'timestamp',
@@ -452,10 +411,10 @@ const TransactionList = () => {
             Filters
           </Typography>
           <Grid container spacing={3}>
-            <Grid item xs={12} md={4}>
+            <Grid item xs={12} md={6}>
               <TextField
                 fullWidth
-                placeholder='Search transactions...'
+                placeholder='Search by Transaction ID, Agent Name, Customer Name...'
                 value={filters.search}
                 onChange={e => handleFilterChange({ search: e.target.value })}
                 InputProps={{
@@ -467,31 +426,19 @@ const TransactionList = () => {
                 }}
               />
             </Grid>
-            <Grid item xs={12} md={4}>
+            <Grid item xs={12} md={6}>
               <FormControl fullWidth>
-                <InputLabel>Type</InputLabel>
-                <Select value={filters.type} label='Type' onChange={e => handleFilterChange({ type: e.target.value })}>
+                <InputLabel>Transaction Type</InputLabel>
+                <Select
+                  value={filters.type}
+                  label='Transaction Type'
+                  onChange={e => handleFilterChange({ type: e.target.value })}
+                >
                   <MenuItem value='all'>All Types</MenuItem>
                   <MenuItem value='deposit'>Deposit</MenuItem>
                   <MenuItem value='withdrawal'>Withdrawal</MenuItem>
                   <MenuItem value='transfer'>Transfer</MenuItem>
                   <MenuItem value='payment'>Payment</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} md={4}>
-              <FormControl fullWidth>
-                <InputLabel>Status</InputLabel>
-                <Select
-                  value={filters.status}
-                  label='Status'
-                  onChange={e => handleFilterChange({ status: e.target.value })}
-                >
-                  <MenuItem value='all'>All Status</MenuItem>
-                  <MenuItem value='completed'>Completed</MenuItem>
-                  <MenuItem value='pending'>Pending</MenuItem>
-                  <MenuItem value='failed'>Failed</MenuItem>
-                  <MenuItem value='cancelled'>Cancelled</MenuItem>
                 </Select>
               </FormControl>
             </Grid>

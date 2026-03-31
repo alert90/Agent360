@@ -53,7 +53,6 @@ const TransactionHistory = () => {
   const [filters, setFilters] = useState({
     search: '',
     type: 'all',
-    status: 'all',
     months: 3
   })
   const [stats, setStats] = useState<TransactionStats>({
@@ -81,7 +80,6 @@ const TransactionHistory = () => {
         limit: pageSize.toString(),
         search: newFilters.search,
         type: newFilters.type,
-        status: newFilters.status,
         months: newFilters.months.toString()
       })
 
@@ -138,7 +136,7 @@ const TransactionHistory = () => {
   }
 
   const handleExport = () => {
-    // Export to CSV
+    // Export to CSV (removed status column)
     const headers = [
       'Transaction ID',
       'Agent Name',
@@ -146,7 +144,6 @@ const TransactionHistory = () => {
       'Type',
       'Amount',
       'Commission',
-      'Status',
       'Date',
       'Location'
     ]
@@ -158,7 +155,6 @@ const TransactionHistory = () => {
       tx.type || '',
       tx.amount || 0,
       tx.commissionAmount || 0,
-      tx.status || '',
       tx.timestamp || '',
       tx.location || ''
     ])
@@ -182,7 +178,7 @@ const TransactionHistory = () => {
     fetchTransactionHistory(0, pagination.pageSize, updatedFilters)
   }
 
-  // Transaction columns for data table
+  // Transaction columns for data table (removed status column)
   const columns: GridColDef[] = [
     {
       field: 'transactionId',
@@ -280,29 +276,6 @@ const TransactionHistory = () => {
           {formatCurrency(row.commissionAmount || 0)}
         </Typography>
       )
-    },
-    {
-      field: 'status',
-      headerName: 'Status',
-      minWidth: 100,
-      renderCell: ({ row }) => {
-        const statusColors: Record<string, any> = {
-          completed: 'success',
-          pending: 'warning',
-          failed: 'error',
-          cancelled: 'secondary'
-        }
-        const color = statusColors[row.status] || 'default'
-
-        return (
-          <Chip
-            label={row.status?.toUpperCase() || 'UNKNOWN'}
-            size='small'
-            color={color}
-            sx={{ textTransform: 'capitalize' }}
-          />
-        )
-      }
     },
     {
       field: 'timestamp',
@@ -457,10 +430,10 @@ const TransactionHistory = () => {
             Filters
           </Typography>
           <Grid container spacing={3}>
-            <Grid item xs={12} md={3}>
+            <Grid item xs={12} md={4}>
               <TextField
                 fullWidth
-                placeholder='Search transactions...'
+                placeholder='Search by Transaction ID, Agent Name, Customer Name...'
                 value={filters.search}
                 onChange={e => handleFilterChange({ search: e.target.value })}
                 InputProps={{
@@ -472,10 +445,14 @@ const TransactionHistory = () => {
                 }}
               />
             </Grid>
-            <Grid item xs={12} md={3}>
+            <Grid item xs={12} md={4}>
               <FormControl fullWidth>
-                <InputLabel>Type</InputLabel>
-                <Select value={filters.type} label='Type' onChange={e => handleFilterChange({ type: e.target.value })}>
+                <InputLabel>Transaction Type</InputLabel>
+                <Select
+                  value={filters.type}
+                  label='Transaction Type'
+                  onChange={e => handleFilterChange({ type: e.target.value })}
+                >
                   <MenuItem value='all'>All Types</MenuItem>
                   <MenuItem value='deposit'>Deposit</MenuItem>
                   <MenuItem value='withdrawal'>Withdrawal</MenuItem>
@@ -484,23 +461,7 @@ const TransactionHistory = () => {
                 </Select>
               </FormControl>
             </Grid>
-            <Grid item xs={12} md={3}>
-              <FormControl fullWidth>
-                <InputLabel>Status</InputLabel>
-                <Select
-                  value={filters.status}
-                  label='Status'
-                  onChange={e => handleFilterChange({ status: e.target.value })}
-                >
-                  <MenuItem value='all'>All Status</MenuItem>
-                  <MenuItem value='completed'>Completed</MenuItem>
-                  <MenuItem value='pending'>Pending</MenuItem>
-                  <MenuItem value='failed'>Failed</MenuItem>
-                  <MenuItem value='cancelled'>Cancelled</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} md={3}>
+            <Grid item xs={12} md={4}>
               <FormControl fullWidth>
                 <InputLabel>Time Period</InputLabel>
                 <Select
@@ -551,7 +512,6 @@ const TransactionHistory = () => {
   )
 }
 
-// ** ACL Configuration - Allow authenticated users to view transaction history
 ;(TransactionHistory as any).acl = {
   action: 'read',
   subject: 'transactions'

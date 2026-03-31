@@ -1,4 +1,3 @@
-// ** React Imports
 import { useState, useEffect } from 'react'
 
 // ** MUI Imports
@@ -24,7 +23,6 @@ interface TransactionOverviewData {
   creditAmount: number
   debitAmount: number
   completedTransactions: number
-  pendingTransactions: number
 }
 
 const AnalyticsTransactionVisits = () => {
@@ -138,9 +136,6 @@ const AnalyticsTransactionVisits = () => {
         <Box sx={{ mt: 2, display: 'flex', justifyContent: 'space-between' }}>
           <Typography variant='body2' sx={{ color: 'text.secondary' }}>
             {data.completedTransactions.toLocaleString()} Completed
-          </Typography>
-          <Typography variant='body2' sx={{ color: 'text.secondary' }}>
-            {data.pendingTransactions.toLocaleString()} Pending
           </Typography>
         </Box>
       </CardContent>

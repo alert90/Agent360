@@ -1,20 +1,28 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
-
-const db = new Database('agent360.db')
+import { prisma } from '../../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     try {
-      // Get all notification settings
-      const settingsStmt = db.prepare(`
-        SELECT * FROM notification_settings
-        WHERE is_active = 1
-        ORDER BY name
-      `)
-      const settings = settingsStmt.all() as any[]
+      const settings = await prisma.notificationSetting.findMany({
+        where: { isActive: 1 },
+        orderBy: { name: 'asc' }
+      })
 
-      res.status(200).json(settings)
+      const formattedSettings = settings.map(s => ({
+        id: s.id,
+        name: s.name,
+        label: s.label,
+        description: s.description,
+        emailEnabled: s.emailEnabled === 1,
+        smsEnabled: s.smsEnabled === 1,
+        pushEnabled: s.pushEnabled === 1,
+        emailTemplate: s.emailTemplate,
+        smsTemplate: s.smsTemplate,
+        isActive: s.isActive === 1
+      }))
+
+      res.status(200).json(formattedSettings)
     } catch (error) {
       console.error('Error fetching notification settings:', error)
       res.status(500).json({ message: 'Internal server error' })
@@ -27,22 +35,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: 'Missing required fields' })
       }
 
-      const insertStmt = db.prepare(`
-        INSERT OR REPLACE INTO notification_settings
-        (name, label, description, email_enabled, sms_enabled, push_enabled, email_template, sms_template, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      `)
-
-      insertStmt.run(
-        name,
-        label,
-        description,
-        emailEnabled ? 1 : 0,
-        smsEnabled ? 1 : 0,
-        pushEnabled ? 1 : 0,
-        emailTemplate,
-        smsTemplate
-      )
+      await prisma.notificationSetting.upsert({
+        where: { name },
+        update: {
+          label,
+          description,
+          emailEnabled: emailEnabled ? 1 : 0,
+          smsEnabled: smsEnabled ? 1 : 0,
+          pushEnabled: pushEnabled ? 1 : 0,
+          emailTemplate,
+          smsTemplate,
+          updatedAt: new Date()
+        },
+        create: {
+          name,
+          label,
+          description,
+          emailEnabled: emailEnabled ? 1 : 0,
+          smsEnabled: smsEnabled ? 1 : 0,
+          pushEnabled: pushEnabled ? 1 : 0,
+          emailTemplate,
+          smsTemplate,
+          isActive: 1
+        }
+      })
 
       res.status(200).json({ message: 'Notification setting updated successfully' })
     } catch (error) {
@@ -57,24 +73,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: 'Settings must be an array' })
       }
 
-      const updateStmt = db.prepare(`
-        UPDATE notification_settings
-        SET email_enabled = ?, sms_enabled = ?, push_enabled = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE name = ?
-      `)
-
-      const transaction = db.transaction(() => {
-        for (const setting of settings) {
-          updateStmt.run(
-            setting.emailEnabled ? 1 : 0,
-            setting.smsEnabled ? 1 : 0,
-            setting.pushEnabled ? 1 : 0,
-            setting.name
-          )
-        }
-      })
-
-      transaction()
+      for (const setting of settings) {
+        await prisma.notificationSetting.update({
+          where: { name: setting.name },
+          data: {
+            emailEnabled: setting.emailEnabled ? 1 : 0,
+            smsEnabled: setting.smsEnabled ? 1 : 0,
+            pushEnabled: setting.pushEnabled ? 1 : 0,
+            updatedAt: new Date()
+          }
+        })
+      }
 
       res.status(200).json({ message: 'Notification settings updated successfully' })
     } catch (error) {

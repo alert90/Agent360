@@ -1,8 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
 import jwt from 'jsonwebtoken'
-
-const db = new Database('agent360.db')
+import { prisma } from '../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -10,7 +8,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Get user from JWT token
     const authHeader = req.headers.authorization
     const token = authHeader?.replace('Bearer ', '') || req.cookies?.token
 
@@ -19,15 +16,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const decoded = jwt.verify(token, process.env.NEXT_PUBLIC_JWT_SECRET!) as { id: number }
-    const userStmt = db.prepare('SELECT * FROM users WHERE id = ? AND is_active = 1')
-    const user = userStmt.get(decoded.id) as any
+    const user = await prisma.user.findUnique({
+      where: {
+        id: decoded.id,
+        isActive: true
+      }
+    })
 
     if (!user || user.role !== 'franchise') {
       return res.status(403).json({ message: 'Access denied' })
     }
 
-    // Get franchise data
-    const franchiseData = await getFranchiseData(user.id)
+    const franchiseData = await getFranchiseData(decoded.id)
 
     res.status(200).json(franchiseData)
   } catch (error) {
@@ -37,155 +37,120 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 }
 
 async function getFranchiseData(userId: number) {
-  // Find the franchise's agent record
-  const franchiseStmt = db.prepare(`
-    SELECT a.*, u.full_name, u.email
-    FROM agents a
-    JOIN users u ON a.id = u.id
-    WHERE u.id = ? AND a.type = 'franchise' AND a.is_active = 1
-  `)
-  const franchise = franchiseStmt.get(userId) as any
+  const franchise = await prisma.agent.findFirst({
+    where: {
+      id: userId,
+      type: 'franchise',
+      isActive: 1
+    }
+  })
 
   if (!franchise) {
     throw new Error('Franchise record not found')
   }
 
-  // Agents served/connected to this franchise (super agents and local agents under them)
-  const agentsServedStmt = db.prepare(`
-    SELECT
-      COUNT(CASE WHEN type = 'super_agent' THEN 1 END) as superAgents,
-      COUNT(CASE WHEN type = 'local_agent' THEN 1 END) as localAgents,
-      COUNT(*) as totalAgents
-    FROM agents
-    WHERE parent_agent_id = ? AND is_active = 1
-  `)
-  const agentsServed = agentsServedStmt.get(franchise.id) as any
+  const franchiseId = franchise.id
 
-  // Total transactions by this franchise (through all agents under it)
-  const transactionsStmt = db.prepare(`
-    SELECT
-      COUNT(*) as totalTransactions,
-      SUM(t.amount) as totalAmount,
-      SUM(CASE WHEN t.status = 'completed' THEN t.amount ELSE 0 END) as completedAmount
-    FROM transactions t
-    JOIN agents a ON t.agent_id = a.id
-    WHERE a.parent_agent_id = ? AND t.status = 'completed'
-  `)
-  const transactionsData = transactionsStmt.get(franchise.id) as any
+  const [superAgentsCount, localAgentsCount, totalAgentsCount] = await Promise.all([
+    prisma.agent.count({ where: { parentAgentId: franchiseId, type: 'super_agent', isActive: 1 } }),
+    prisma.agent.count({ where: { parentAgentId: franchiseId, type: 'local_agent', isActive: 1 } }),
+    prisma.agent.count({ where: { parentAgentId: franchiseId, isActive: 1 } })
+  ])
 
-  // Commission data for this franchise
-  const commissionStmt = db.prepare(`
-    SELECT
-      SUM(commission_amount) as totalCommission,
-      SUM(CASE WHEN commission_eligible = 1 THEN commission_amount ELSE 0 END) as eligibleCommission
-    FROM agents
-    WHERE parent_agent_id = ? AND is_active = 1
-  `)
-  const commissionData = commissionStmt.get(franchise.id) as any
+  const transactionsData = await prisma.transaction.aggregate({
+    where: {
+      agent: {
+        parentAgentId: franchiseId
+      },
+      status: 'completed'
+    },
+    _count: { id: true },
+    _sum: { amount: true }
+  })
 
-  // Recent transactions by agents under this franchise
-  const recentTransactionsStmt = db.prepare(`
-    SELECT
-      t.id,
-      t.transaction_id,
-      t.agent_name,
-      t.customer_name,
-      t.type,
-      t.amount,
-      t.status,
-      t.timestamp,
-      a.name as agent_name_full,
-      a.type as agent_type,
-      a.branch_name
-    FROM transactions t
-    JOIN agents a ON t.agent_id = a.id
-    WHERE a.parent_agent_id = ?
-    ORDER BY t.timestamp DESC
-    LIMIT 15
-  `)
-  const recentTransactions = recentTransactionsStmt.all(franchise.id) as any[]
+  const commissionData = await prisma.agent.aggregate({
+    where: {
+      parentAgentId: franchiseId,
+      isActive: 1
+    },
+    _sum: { commissionAmount: true }
+  })
 
-  // Monthly performance data
-  const monthlyPerformanceStmt = db.prepare(`
+  const recentTransactions = await prisma.transaction.findMany({
+    where: {
+      agent: {
+        parentAgentId: franchiseId
+      }
+    },
+    include: {
+      agent: {
+        select: {
+          name: true,
+          type: true,
+          branchName: true
+        }
+      }
+    },
+    orderBy: { timestamp: 'desc' },
+    take: 15
+  })
+
+  const monthlyPerformance = await prisma.$queryRaw`
     SELECT
-      strftime('%Y-%m', t.timestamp) as month,
-      COUNT(*) as transactionCount,
-      SUM(t.amount) as totalAmount,
-      SUM(CASE WHEN t.commission_eligible = 1 THEN t.commission_amount ELSE 0 END) as commissionEarned,
-      COUNT(DISTINCT t.agent_id) as activeAgents
-    FROM transactions t
-    JOIN agents a ON t.agent_id = a.id
-    WHERE a.parent_agent_id = ? AND t.status = 'completed'
-    GROUP BY strftime('%Y-%m', t.timestamp)
-    ORDER BY month DESC
+      TO_CHAR(DATE_TRUNC('month', t."timestamp"), 'YYYY-MM') as month,
+      COUNT(*)::integer as "transactionCount",
+      COALESCE(SUM(t."amount"), 0)::numeric as "totalAmount",
+      COALESCE(SUM(CASE WHEN t."commissionEligible" = true THEN t."commissionAmount" ELSE 0 END), 0)::numeric as "commissionEarned",
+      COUNT(DISTINCT t."agentId")::integer as "activeAgents"
+    FROM "transactions" t
+    JOIN "agents" a ON t."agentId" = a.id
+    WHERE a."parentAgentId" = ${franchiseId} AND t.status = 'completed'
+    GROUP BY DATE_TRUNC('month', t."timestamp")
+    ORDER BY DATE_TRUNC('month', t."timestamp") DESC
     LIMIT 6
-  `)
-  const monthlyPerformance = monthlyPerformanceStmt.all(franchise.id) as any[]
+  `
 
-  // Super agent performance under this franchise
-  const superAgentPerformanceStmt = db.prepare(`
+  const zonePerformance = await prisma.$queryRaw`
     SELECT
-      a.id,
-      a.name,
-      a.account_number,
-      a.branch_name,
-      COUNT(DISTINCT sa.id) as localAgentsUnder,
-      COUNT(t.id) as transactionCount,
-      SUM(t.amount) as totalAmount,
-      SUM(CASE WHEN t.commission_eligible = 1 THEN t.commission_amount ELSE 0 END) as commissionEarned
-    FROM agents a
-    LEFT JOIN agents sa ON sa.parent_agent_id = a.id AND sa.type = 'local_agent' AND sa.is_active = 1
-    LEFT JOIN transactions t ON sa.id = t.agent_id AND t.status = 'completed'
-    WHERE a.parent_agent_id = ? AND a.type = 'super_agent' AND a.is_active = 1
-    GROUP BY a.id, a.name, a.account_number, a.branch_name
-    ORDER BY totalAmount DESC
-  `)
-  const superAgentPerformance = superAgentPerformanceStmt.all(franchise.id) as any[]
-
-  // Zone/branch performance under this franchise
-  const zonePerformanceStmt = db.prepare(`
-    SELECT
-      COALESCE(a.branch_name, 'Unknown') as zone,
-      COUNT(DISTINCT a.id) as agentsCount,
-      COUNT(t.id) as transactionCount,
-      SUM(t.amount) as totalAmount,
-      AVG(t.amount) as averageTransaction
-    FROM agents a
-    LEFT JOIN transactions t ON a.id = t.agent_id AND t.status = 'completed'
-    WHERE a.parent_agent_id = ?
-    GROUP BY a.branch_name
-    ORDER BY totalAmount DESC
-  `)
-  const zonePerformance = zonePerformanceStmt.all(franchise.id) as any[]
+      COALESCE(a."branchName", 'Unknown') as zone,
+      COUNT(DISTINCT a.id)::integer as "agentsCount",
+      COUNT(t.id)::integer as "transactionCount",
+      COALESCE(SUM(t."amount"), 0)::numeric as "totalAmount",
+      COALESCE(AVG(t."amount"), 0)::numeric as "averageTransaction"
+    FROM "agents" a
+    LEFT JOIN "transactions" t ON a.id = t."agentId" AND t.status = 'completed'
+    WHERE a."parentAgentId" = ${franchiseId}
+    GROUP BY a."branchName"
+    ORDER BY "totalAmount" DESC
+  `
 
   return {
     franchise: {
       id: franchise.id,
       name: franchise.name,
       accountNumber: franchise.accountNumber,
-      branchName: franchise.branch_name,
-      totalCommission: franchise.commission_amount,
+      branchName: franchise.branchName,
+      totalCommission: franchise.commissionAmount,
       payband: franchise.payband
     },
     summary: {
       agentsServed: {
-        superAgents: agentsServed?.superAgents || 0,
-        localAgents: agentsServed?.localAgents || 0,
-        totalAgents: agentsServed?.totalAgents || 0
+        superAgents: superAgentsCount,
+        localAgents: localAgentsCount,
+        totalAgents: totalAgentsCount
       },
       transactions: {
-        totalTransactions: transactionsData?.totalTransactions || 0,
-        totalAmount: transactionsData?.totalAmount || 0,
-        completedAmount: transactionsData?.completedAmount || 0
+        totalTransactions: transactionsData._count.id || 0,
+        totalAmount: Number(transactionsData._sum?.amount || 0),
+        completedAmount: Number(transactionsData._sum?.amount || 0)
       },
       commission: {
-        expectedCommission: commissionData?.totalCommission || 0,
-        totalCommission: commissionData?.eligibleCommission || 0
+        expectedCommission: Number(commissionData._sum?.commissionAmount || 0),
+        totalCommission: Number(commissionData._sum?.commissionAmount || 0)
       }
     },
     recentTransactions,
     monthlyPerformance,
-    superAgentPerformance,
     zonePerformance
   }
 }

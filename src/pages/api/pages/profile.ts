@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
 import jwt from 'jsonwebtoken'
-import { prisma } from 'src/lib/prisma'
+import { prisma } from '../../../lib/db'
 import { AgentConnection, AgentTransaction } from 'src/types/apps/userTypes'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

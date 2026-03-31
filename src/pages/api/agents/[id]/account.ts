@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import { prisma } from 'src/lib/prisma'
+import { prisma } from '../../../../lib/db'
 import jwt from 'jsonwebtoken'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -27,7 +27,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const agentId = parseInt(id)
 
     if (req.method === 'GET') {
-      // Get agent with transaction stats
       const agent = await prisma.agent.findUnique({
         where: { id: agentId },
         include: {
@@ -61,14 +60,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })
       }
 
-      // Get recent transactions
       const recentTransactions = await prisma.transaction.findMany({
         where: { agentId: agent.id },
         orderBy: { timestamp: 'desc' },
         take: 10
       })
 
-      // Get transaction summary by type
       const transactionSummary = await prisma.transaction.groupBy({
         by: ['type'],
         where: { agentId: agent.id },
@@ -77,7 +74,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         orderBy: { _sum: { amount: 'desc' } }
       })
 
-      // Get monthly performance (last 6 months)
       const sixMonthsAgo = new Date()
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
 
@@ -94,7 +90,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ORDER BY month DESC
       `
 
-      // Get recent transactions count and amount (last 30 days)
       const thirtyDaysAgo = new Date()
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
 
@@ -107,7 +102,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         _sum: { amount: true }
       })
 
-      // Transform to match frontend interface
       const formattedAgent = {
         id: agent.id,
         account_number: agent.accountNumber,
@@ -193,7 +187,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         is_active
       } = req.body
 
-      // Check if agent exists
       const existingAgent = await prisma.agent.findUnique({
         where: { id: agentId }
       })
@@ -205,7 +198,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })
       }
 
-      // Update agent
       const updatedAgent = await prisma.agent.update({
         where: { id: agentId },
         data: {

@@ -1,12 +1,11 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import { prisma } from 'src/lib/prisma'
+import { prisma } from '../../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query
-  const agentId = parseInt(id as string)
+  const parentAgentId = parseInt(id as string)
 
   if (req.method === 'POST') {
-    // Assign an agent
     const { target_agent_id, target_account_number } = req.body
 
     if (!target_agent_id || !target_account_number) {
@@ -17,73 +16,86 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     try {
-      // Check if the target agent exists
-      const targetAgent = await prisma.agent.findUnique({
-        where: { id: parseInt(target_agent_id) }
-      })
-
-      if (!targetAgent) {
-        return res.status(404).json({
-          success: false,
-          message: 'Target agent not found'
-        })
-      }
-
-      // Start a transaction
       const result = await prisma.$transaction(async tx => {
-        // Update the agent's parentAgentId
+        // Fetch parent agent (super agent or franchise)
+        const parentAgent = await tx.agent.findUnique({
+          where: { id: parentAgentId }
+        })
+
+        if (!parentAgent) {
+          throw new Error('Parent agent not found')
+        }
+
+        // Check if target agent exists by ID or account_number
+        let targetAgent = await tx.agent.findUnique({
+          where: { id: parseInt(target_agent_id) }
+        })
+
+        let targetAgentId = parseInt(target_agent_id)
+        let wasCreated = false
+
+        if (!targetAgent) {
+          // Try by account number (for detected agents)
+          targetAgent = await tx.agent.findUnique({
+            where: { accountNumber: target_account_number }
+          })
+
+          if (targetAgent) {
+            targetAgentId = targetAgent.id
+          } else {
+            // Create new agent with required fields
+            targetAgent = await tx.agent.create({
+              data: {
+                accountNumber: target_account_number,
+                name: `${target_account_number} (Auto-Created)`,
+                type: 'local_agent',
+                branchCode: parentAgent.branchCode || 'AUTO',
+                branchName: parentAgent.branchName || 'Auto Created',
+                isActive: 1,
+                zone: parentAgent.zone || 'Unknown'
+              }
+            })
+            targetAgentId = targetAgent.id
+            wasCreated = true
+            console.log(`Created new agent ${targetAgentId} for account ${target_account_number}`)
+          }
+        }
+
+        // Check if target agent is already assigned to someone else
+        if (targetAgent.parentAgentId && targetAgent.parentAgentId !== parentAgentId) {
+          throw new Error(
+            `Agent ${targetAgent.name} is already assigned to another ${
+              parentAgent.type === 'super_agent' ? 'super agent' : 'franchise'
+            }. Please unassign first.`
+          )
+        }
+
+        // Update parent_agent_id (this is the only assignment needed)
         const updatedAgent = await tx.agent.update({
-          where: { id: parseInt(target_agent_id) },
+          where: { id: targetAgentId },
           data: {
-            parentAgentId: agentId,
+            parentAgentId: parentAgentId,
             updatedAt: new Date()
           }
         })
 
-        // Create or update assignment record
-        const assignment = await tx.agentAssignment.upsert({
-          where: {
-            // You might need a composite unique constraint or use findFirst
-            local_agent_id_super_agent_id_franchise_id: {
-              localAgentId: parseInt(target_agent_id),
-              superAgentId: agentId,
-              franchiseId: null
-            }
-          },
-          update: {
-            status: 'active',
-            updatedAt: new Date().toISOString()
-          },
-          create: {
-            localAgentId: parseInt(target_agent_id),
-            superAgentId: agentId,
-            franchiseId: null,
-            status: 'active',
-            assignedBy: 'admin',
-            assignedAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          }
-        })
-
-        return { updatedAgent, assignment }
+        return { updatedAgent, agentCreated: wasCreated }
       })
 
       res.status(200).json({
         success: true,
-        message: 'Agent assigned successfully',
+        message: result.agentCreated ? 'New agent created and assigned successfully' : 'Agent assigned successfully',
         data: result
       })
     } catch (error) {
       console.error('Error assigning agent:', error)
       res.status(500).json({
         success: false,
-        message: 'Failed to assign agent',
-        error: error instanceof Error ? error.message : 'Unknown error'
+        message: error instanceof Error ? error.message : 'Failed to assign agent'
       })
     }
   } else if (req.method === 'DELETE') {
-    // Unassign an agent
-    const { target_agent_id, target_account_number } = req.query
+    const { target_agent_id } = req.query
 
     if (!target_agent_id) {
       return res.status(400).json({
@@ -93,50 +105,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     try {
-      // Start a transaction
-      const result = await prisma.$transaction(async tx => {
-        // Update the agent's parentAgentId to NULL
-        const updatedAgent = await tx.agent.update({
-          where: { id: parseInt(target_agent_id as string) },
-          data: {
-            parentAgentId: null,
-            updatedAt: new Date()
-          }
-        })
+      const targetAgentId = parseInt(target_agent_id as string)
 
-        // Find and update the assignment
-        const assignment = await tx.agentAssignment.findFirst({
-          where: {
-            localAgentId: parseInt(target_agent_id as string),
-            OR: [{ superAgentId: agentId }, { franchiseId: agentId }],
-            status: 'active'
-          }
-        })
+      // Check if target agent exists and is assigned to this parent
+      const targetAgent = await prisma.agent.findUnique({
+        where: { id: targetAgentId }
+      })
 
-        if (assignment) {
-          await tx.agentAssignment.update({
-            where: { id: assignment.id },
-            data: {
-              status: 'inactive',
-              updatedAt: new Date().toISOString()
-            }
-          })
+      if (!targetAgent) {
+        return res.status(404).json({
+          success: false,
+          message: `Target agent ${target_agent_id} not found`
+        })
+      }
+
+      if (targetAgent.parentAgentId !== parentAgentId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Agent is not assigned to this parent'
+        })
+      }
+
+      // Remove parent_agent_id (unassign)
+      const updatedAgent = await prisma.agent.update({
+        where: { id: targetAgentId },
+        data: {
+          parentAgentId: null,
+          updatedAt: new Date()
         }
-
-        return updatedAgent
       })
 
       res.status(200).json({
         success: true,
         message: 'Agent unassigned successfully',
-        data: result
+        data: updatedAgent
       })
     } catch (error) {
       console.error('Error unassigning agent:', error)
       res.status(500).json({
         success: false,
-        message: 'Failed to unassign agent',
-        error: error instanceof Error ? error.message : 'Unknown error'
+        message: error instanceof Error ? error.message : 'Failed to unassign agent'
       })
     }
   } else {

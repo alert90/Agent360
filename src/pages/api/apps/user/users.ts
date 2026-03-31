@@ -1,64 +1,71 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from '../../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ message: 'Method not allowed' })
   }
 
-  const db = new Database('agent360.db')
-
   try {
-    // Get users from database
-    const users = db
-      .prepare(
-        `
-      SELECT
-        id,
-        email,
-        username,
-        full_name as fullName,
-        role,
-        permissions,
-        location,
-        zone,
-        is_active as isActive,
-        created_at as createdAt,
-        updated_at as updatedAt
-      FROM users
-      ORDER BY created_at DESC
-    `
-      )
-      .all()
+    const { id } = req.query
 
-    // Transform data to match expected format
-    const transformedUsers = users.map((user: any) => ({
+    if (!id) {
+      return res.status(400).json({ message: 'User ID is required' })
+    }
+
+    const userId = parseInt(id as string)
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        fullName: true,
+        role: true,
+        permissions: true,
+        location: true,
+        zone: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        phoneNumber: true,
+        address: true,
+        avatar: true
+      }
+    })
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' })
+    }
+
+    const transformedUser = {
       id: user.id,
       email: user.email,
       username: user.username,
       fullName: user.fullName || 'Unknown User',
       role: user.role || 'user',
-      avatar: '', // Could add avatar field later
+      avatar: user.avatar || '',
       avatarColor: 'primary',
-      currentPlan: 'basic', // Could add plan field later
-      billing: 'Active', // Could add billing field later
+      currentPlan: 'basic',
+      billing: 'Active',
       status: user.isActive ? 'active' : 'inactive',
       permissions: user.permissions ? JSON.parse(user.permissions) : [],
       location: user.location || '',
       zone: user.zone || '',
+      phoneNumber: user.phoneNumber,
+      address: user.address,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
-    }))
+    }
 
-    return res.status(200).json(transformedUsers)
+    return res.status(200).json(transformedUser)
   } catch (error) {
-    console.error('Users API error:', error)
+    console.error('User API error:', error)
 
     return res.status(500).json({
-      message: 'Failed to fetch users',
+      message: 'Failed to fetch user',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }

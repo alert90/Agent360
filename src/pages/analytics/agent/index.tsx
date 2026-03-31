@@ -81,7 +81,8 @@ const AgentAnalytics = () => {
           agent.branch_name.toLowerCase().includes(searchTerm.toLowerCase())
         const matchesType = selectedType === 'all' || agent.type === selectedType
         const matchesZone = selectedZone === 'all' || agent.zone === selectedZone
-        return matchesSearch && matchesType && matchesZone
+        
+return matchesSearch && matchesType && matchesZone
       })
       .sort((a, b) => b.total_transaction_amount - a.total_transaction_amount) // Sort by transaction amount desc
   }, [agents, searchTerm, selectedType, selectedZone])

@@ -1,64 +1,58 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from '../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ message: 'Method not allowed' })
   }
 
-  const db = new Database('agent360.db')
-
   try {
     // Get user statistics from database
-    const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number }
-    const activeUsers = db.prepare('SELECT COUNT(*) as count FROM users WHERE is_active = 1').get() as { count: number }
-    const transactionCount = db.prepare('SELECT COUNT(*) as count FROM transactions').get() as { count: number }
-    const totalAmount = db.prepare('SELECT SUM(amount) as total FROM transactions').get() as { total: number }
+    const userCount = await prisma.user.count()
+    const activeUsers = await prisma.user.count({ where: { isActive: true } }) // Changed from 1 to true for Boolean
+    const transactionCount = await prisma.transaction.count()
 
     // Get agent statistics
-    const agentCount = db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number }
-    const activeAgents = db.prepare('SELECT COUNT(*) as count FROM agents WHERE is_active = 1').get() as {
-      count: number
-    }
+    const agentCount = await prisma.agent.count()
+    const activeAgents = await prisma.agent.count({ where: { isActive: 1 } })
 
     // Get commission statistics
-    const commissionCount = db.prepare('SELECT COUNT(*) as count FROM commission_calculations').get() as {
-      count: number
-    }
-    const totalCommission = db.prepare('SELECT SUM(final_commission) as total FROM commission_calculations').get() as {
-      total: number
-    }
+    const commissionCount = await prisma.commission.count()
+    const totalCommissionResult = await prisma.commission.aggregate({
+      _sum: { finalCommission: true }
+    })
+    const totalCommission = totalCommissionResult._sum.finalCommission || 0
 
     const stats = {
       statsHorizontalWithDetails: [
         {
           title: 'Total Users',
-          stats: userCount.count,
-          change: activeUsers.count,
+          stats: userCount,
+          change: activeUsers,
           subtitle: 'Active Users',
           color: 'primary',
           icon: 'tabler:users'
         },
         {
           title: 'Total Agents',
-          stats: agentCount.count,
-          change: activeAgents.count,
+          stats: agentCount,
+          change: activeAgents,
           subtitle: 'Active Agents',
           color: 'success',
           icon: 'tabler:user-check'
         },
         {
           title: 'Transactions',
-          stats: transactionCount.count,
-          change: Math.round((transactionCount.count * 100) / Math.max(userCount.count, 1)),
+          stats: transactionCount,
+          change: Math.round((transactionCount * 100) / Math.max(userCount, 1)),
           subtitle: 'Per User',
           color: 'warning',
           icon: 'tabler:exchange'
         },
         {
           title: 'Total Commission',
-          stats: Math.round(totalCommission?.total || 0),
-          change: commissionCount.count,
+          stats: Math.round(totalCommission),
+          change: commissionCount,
           subtitle: 'Calculations',
           color: 'info',
           icon: 'tabler:coin'
@@ -74,7 +68,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: 'Failed to fetch statistics',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }

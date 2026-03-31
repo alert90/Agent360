@@ -47,11 +47,6 @@ const navigation = (): HorizontalNavItemsType => {
           title: 'Agent Performance',
           icon: 'tabler:chart-line',
           path: '/agents/performance'
-        },
-        {
-          title: 'Agent Assignment',
-          icon: 'tabler:link',
-          path: '/agents/assign'
         }
       ]
     },

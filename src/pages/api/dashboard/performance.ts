@@ -1,142 +1,126 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
+import { prisma } from '../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ message: 'Method not allowed' })
   }
 
-  const db = new Database('agent360.db')
-
   try {
-    // Get performance metrics
-    const totalTransactions = db.prepare('SELECT COUNT(*) as count FROM transactions').get() as { count: number }
-    const totalAmount = db.prepare('SELECT SUM(amount) as total FROM transactions').get() as { total: number }
-    const totalAgents = db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number }
-    const activeAgents = db.prepare('SELECT COUNT(*) as count FROM agents WHERE is_active = 1').get() as {
-      count: number
-    }
+    const [totalTransactions, totalAmountRaw, totalAgents, activeAgents] = await Promise.all([
+      prisma.transaction.count(),
+      prisma.transaction.aggregate({ _sum: { amount: true } }),
+      prisma.agent.count(),
+      prisma.agent.count({ where: { isActive: 1 } })
+    ])
 
-    // Get monthly trends
-    const monthlyTrends = db
-      .prepare(
-        `
+    const totalAmount = Number(totalAmountRaw._sum?.amount || 0)
+
+    // Monthly trends (last 12 months)
+    const monthlyTrends = await prisma.$queryRaw`
       SELECT
-        strftime('%Y-%m', timestamp) as month,
-        COUNT(*) as transactions,
-        SUM(amount) as totalAmount,
-        AVG(amount) as avgAmount
-      FROM transactions
-      WHERE timestamp >= date('now', '-12 months')
-      GROUP BY strftime('%Y-%m', timestamp)
-      ORDER BY month DESC
+        TO_CHAR(DATE_TRUNC('month', "timestamp"), 'YYYY-MM') as month,
+        COUNT(*)::integer as transactions,
+        COALESCE(SUM("amount"), 0)::numeric as "totalAmount",
+        COALESCE(AVG("amount"), 0)::numeric as "avgAmount"
+      FROM "transactions"
+      WHERE "timestamp" >= NOW() - INTERVAL '12 months'
+      GROUP BY DATE_TRUNC('month', "timestamp")
+      ORDER BY DATE_TRUNC('month', "timestamp") DESC
     `
-      )
-      .all()
 
-    // Get top performing agents
-    const topAgents = db
-      .prepare(
-        `
+    // Top performing agents (last 30 days)
+    const topAgents = await prisma.$queryRaw`
       SELECT
+        a.id,
         a.name,
-        a.account_number,
-        COUNT(t.id) as transactionCount,
-        SUM(t.amount) as totalAmount,
-        AVG(t.amount) as avgAmount
-      FROM agents a
-      LEFT JOIN transactions t ON a.id = t.agent_id
-      WHERE t.timestamp >= date('now', '-30 days')
-      GROUP BY a.id
-      ORDER BY totalAmount DESC
+        a."accountNumber",
+        COUNT(t.id)::integer as "transactionCount",
+        COALESCE(SUM(t."amount"), 0)::numeric as "totalAmount",
+        COALESCE(AVG(t."amount"), 0)::numeric as "avgAmount"
+      FROM "agents" a
+      LEFT JOIN "transactions" t ON a.id = t."agentId" AND t."timestamp" >= NOW() - INTERVAL '30 days' AND t.status = 'completed'
+      WHERE a."isActive" = 1
+      GROUP BY a.id, a.name, a."accountNumber"
+      ORDER BY "totalAmount" DESC
       LIMIT 10
     `
-      )
-      .all()
 
-    // Get transaction types breakdown
-    const transactionTypes = db
-      .prepare(
-        `
+    // Transaction types breakdown (last 30 days)
+    const transactionTypes = await prisma.$queryRaw`
       SELECT
         type,
-        COUNT(*) as count,
-        SUM(amount) as total
-      FROM transactions
-      WHERE timestamp >= date('now', '-30 days')
+        COUNT(*)::integer as count,
+        COALESCE(SUM("amount"), 0)::numeric as total
+      FROM "transactions"
+      WHERE "timestamp" >= NOW() - INTERVAL '30 days'
       GROUP BY type
+      ORDER BY total DESC
     `
-      )
-      .all()
 
-    // Get zone performance
-    const zonePerformance = db
-      .prepare(
-        `
+    // Zone performance (last 30 days)
+    const zonePerformance = await prisma.$queryRaw`
       SELECT
-        zone,
-        COUNT(*) as transactions,
-        SUM(amount) as totalAmount
-      FROM transactions
-      WHERE timestamp >= date('now', '-30 days') AND zone IS NOT NULL
-      GROUP BY zone
-      ORDER BY totalAmount DESC
+        "zone",
+        COUNT(*)::integer as transactions,
+        COALESCE(SUM("amount"), 0)::numeric as "totalAmount"
+      FROM "transactions"
+      WHERE "timestamp" >= NOW() - INTERVAL '30 days' AND "zone" IS NOT NULL
+      GROUP BY "zone"
+      ORDER BY "totalAmount" DESC
     `
-      )
-      .all()
 
-    // Get commission summary
-    const commissionSummary = db
-      .prepare(
-        `
-      SELECT
-        COUNT(*) as calculations,
-        SUM(final_commission) as totalCommission,
-        AVG(final_commission) as avgCommission
-      FROM commission_calculations
-      WHERE period >= strftime('%Y-%m', date('now', '-6 months'))
-    `
-      )
-      .get() as any
+    // Commission summary (last 6 months) - using commissions table
+    const sixMonthsAgo = new Date()
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
+
+    let commissionSummary = {
+      calculations: 0,
+      totalCommission: 0,
+      avgCommission: 0
+    }
+
+    // Check if commissions table exists and has data
+    try {
+      const commissionResult = await prisma.commission.aggregate({
+        where: {
+          createdAt: { gte: sixMonthsAgo }
+        },
+        _count: {
+          id: true
+        },
+        _sum: {
+          finalCommission: true
+        },
+        _avg: {
+          finalCommission: true
+        }
+      })
+
+      commissionSummary = {
+        calculations: commissionResult._count.id || 0,
+        totalCommission: Number(commissionResult._sum?.finalCommission || 0),
+        avgCommission: Number(commissionResult._avg?.finalCommission || 0)
+      }
+    } catch (error) {
+      console.log('Commissions table not yet populated')
+    }
 
     const performance = {
       overview: {
-        totalTransactions: totalTransactions.count,
-        totalAmount: totalAmount?.total || 0,
-        totalAgents: totalAgents.count,
-        activeAgents: activeAgents.count,
-        avgTransactionAmount: totalAmount?.total ? totalAmount.total / totalTransactions.count : 0
+        totalTransactions,
+        totalAmount,
+        totalAgents,
+        activeAgents,
+        avgTransactionAmount: totalTransactions > 0 ? totalAmount / totalTransactions : 0
       },
       trends: {
-        monthly: monthlyTrends.map((trend: any) => ({
-          month: trend.month,
-          transactions: trend.transactions,
-          totalAmount: trend.totalAmount || 0,
-          avgAmount: trend.avgAmount || 0
-        }))
+        monthly: monthlyTrends
       },
-      topAgents: topAgents.map((agent: any) => ({
-        name: agent.name,
-        accountNumber: agent.account_number,
-        transactionCount: agent.transactionCount,
-        totalAmount: agent.totalAmount || 0,
-        avgAmount: agent.avgAmount || 0
-      })),
-      transactionTypes: transactionTypes.map((type: any) => ({
-        type: type.type,
-        count: type.count,
-        total: type.total || 0
-      })),
-      zonePerformance: zonePerformance.map((zone: any) => ({
-        zone: zone.zone || 'Unknown',
-        transactions: zone.transactions,
-        totalAmount: zone.totalAmount || 0
-      })),
-      commissions: {
-        calculations: commissionSummary?.calculations || 0,
-        totalCommission: commissionSummary?.totalCommission || 0,
-        avgCommission: commissionSummary?.avgCommission || 0
-      }
+      topAgents,
+      transactionTypes,
+      zonePerformance,
+      commissions: commissionSummary
     }
 
     return res.status(200).json(performance)
@@ -147,7 +131,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: 'Failed to fetch performance data',
       error: error instanceof Error ? error.message : 'Unknown error'
     })
-  } finally {
-    db.close()
   }
 }

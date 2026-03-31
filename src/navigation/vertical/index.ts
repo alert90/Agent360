@@ -65,12 +65,6 @@ const navigation = (): VerticalNavItemsType => {
           path: '/agents/performance',
           action: 'read',
           subject: 'agent-management'
-        },
-        {
-          title: 'Agent Assignment',
-          path: '/agents/assign',
-          action: 'update',
-          subject: 'agent-management'
         }
       ]
     },

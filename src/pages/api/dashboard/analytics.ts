@@ -1,44 +1,15 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import { prisma } from 'src/lib/prisma'
 import jwt from 'jsonwebtoken'
-
-interface AnalyticsData {
-  period: string
-  transactionType: string
-  data: {
-    totalTransactions: number
-    totalAmount: number
-    totalCommission: number
-    avgTransactionAmount: number
-    dailyData?: Array<{
-      date: string
-      transactions: number
-      amount: number
-      commission: number
-    }>
-    weeklyData?: Array<{
-      week: string
-      transactions: number
-      amount: number
-      commission: number
-    }>
-    monthlyData?: Array<{
-      month: string
-      transactions: number
-      amount: number
-      commission: number
-    }>
-  }
-}
+import { prisma } from '../../../lib/db'
+import { Prisma } from '@prisma/client'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  try {
-    if (req.method !== 'GET') {
-      return res.status(405).json({ message: 'Method not allowed' })
-    }
+  if (req.method !== 'GET') {
+    return res.status(405).json({ message: 'Method not allowed' })
+  }
 
-    // Verify JWT token
-    const token = req.headers.authorization?.replace('Bearer ', '')
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '') || req.cookies?.token
     if (!token) {
       return res.status(401).json({ message: 'Unauthorized' })
     }
@@ -52,152 +23,149 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(401).json({ message: 'User not found' })
     }
 
-    const { period = 'monthly', transactionType = 'all', startDate = '', endDate = '' } = req.query
+    const { period = 'monthly', transactionType = 'all', startDate, endDate } = req.query
 
-    // Build where clause
     const whereClause: any = {}
 
-    // Apply role-based filtering
     if (user.role === 'agent') {
       whereClause.agentId = user.id
     } else if (user.role === 'super_agent' || user.role === 'franchise') {
       const userAgents = await prisma.agent.findMany({
-        where: { parentAgentId: user.id },
+        where: { parentAgentId: user.id, isActive: 1 },
         select: { id: true }
       })
       if (userAgents.length > 0) {
         whereClause.agentId = { in: userAgents.map(a => a.id) }
       } else {
-        whereClause.id = 0
+        whereClause.id = -1
       }
     }
 
-    // Add transaction type filter
-    if (transactionType && transactionType !== 'all') {
+    if (transactionType !== 'all') {
       whereClause.type = transactionType
     }
 
-    // Add date range filter - default to last 3 months
-    let dateFilter = {}
-    if (startDate) {
-      dateFilter = { gte: new Date(startDate as string) }
-    } else if (!startDate && !endDate) {
-      const threeMonthsAgo = new Date()
-      threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3)
-      dateFilter = { gte: threeMonthsAgo }
-    }
-    if (endDate) {
-      dateFilter = { ...dateFilter, lte: new Date(endDate as string) }
-    }
+    const dateFilter: any = {}
+    if (startDate) dateFilter.gte = new Date(startDate as string)
+    if (endDate) dateFilter.lte = new Date(endDate as string)
     if (Object.keys(dateFilter).length > 0) {
       whereClause.timestamp = dateFilter
     }
 
-    // Calculate overall statistics
     const stats = await prisma.transaction.aggregate({
       where: whereClause,
       _count: { id: true },
-      _sum: {
-        amount: true,
-        commissionAmount: true
-      },
-      _avg: {
-        amount: true
-      }
+      _sum: { amount: true, commissionAmount: true },
+      _avg: { amount: true }
     })
 
-    // Get user counts for the first card
-    let userCounts
-    if (user.role === 'super_agent' || user.role === 'franchise') {
-      const [superAgentCount, agentCount, franchiseCount] = await Promise.all([
-        prisma.agent.count({ where: { type: 'super_agent', parentAgentId: user.id, isActive: 1 } }),
-        prisma.agent.count({ where: { type: 'local_agent', parentAgentId: user.id, isActive: 1 } }),
-        prisma.agent.count({ where: { type: 'franchise', parentAgentId: user.id, isActive: 1 } })
+    const userCounts: any = { superAgentCount: 0, agentCount: 0, franchiseCount: 0 }
+
+    if (user.role === 'super_agent') {
+      userCounts.agentCount = await prisma.agent.count({
+        where: { parentAgentId: user.id, type: 'local_agent', isActive: 1 }
+      })
+    } else if (user.role === 'franchise') {
+      const [superAgents, localAgents] = await Promise.all([
+        prisma.agent.count({ where: { parentAgentId: user.id, type: 'super_agent', isActive: 1 } }),
+        prisma.agent.count({ where: { parentAgentId: user.id, type: 'local_agent', isActive: 1 } })
       ])
-      userCounts = { superAgentCount, agentCount, franchiseCount }
-    } else if (user.role === 'agent') {
-      userCounts = { superAgentCount: 0, agentCount: 0, franchiseCount: 0 }
-    } else {
-      const [superAgentCount, agentCount, franchiseCount] = await Promise.all([
+      userCounts.superAgentCount = superAgents
+      userCounts.agentCount = localAgents
+    } else if (user.role === 'admin' || user.role === 'analyst') {
+      const [superAgents, localAgents, franchises] = await Promise.all([
         prisma.agent.count({ where: { type: 'super_agent', isActive: 1 } }),
         prisma.agent.count({ where: { type: 'local_agent', isActive: 1 } }),
         prisma.agent.count({ where: { type: 'franchise', isActive: 1 } })
       ])
-      userCounts = { superAgentCount, agentCount, franchiseCount }
+      userCounts.superAgentCount = superAgents
+      userCounts.agentCount = localAgents
+      userCounts.franchiseCount = franchises
     }
 
-    // Generate time series data based on period
+    // Build WHERE clause for raw SQL - simplified approach
     let timeSeriesData: any[] = []
 
     if (period === 'daily') {
-      // Get daily data for the last 30 days
-      timeSeriesData = await prisma.$queryRawUnsafe(`
+      timeSeriesData = await prisma.$queryRaw`
         SELECT
-          DATE(timestamp) as date,
+          DATE(t."timestamp") as date,
           COUNT(*)::integer as transactions,
-          COALESCE(SUM(amount), 0)::numeric as amount,
-          COALESCE(SUM(commission_amount), 0)::numeric as commission
-        FROM transactions
-        WHERE timestamp >= NOW() - INTERVAL '30 days'
-        GROUP BY DATE(timestamp)
-        ORDER BY DATE(timestamp) DESC
+          COALESCE(SUM(t."amount"), 0)::numeric as amount,
+          COALESCE(SUM(t."commissionAmount"), 0)::numeric as commission
+        FROM "transactions" t
+        WHERE 1=1
+        ${
+          whereClause.agentId
+            ? Prisma.sql`AND t."agentId" IN (${Prisma.join(
+                Array.isArray(whereClause.agentId.in) ? whereClause.agentId.in : [whereClause.agentId]
+              )})`
+            : Prisma.empty
+        }
+        ${whereClause.type ? Prisma.sql`AND t."type" = ${whereClause.type}` : Prisma.empty}
+        ${whereClause.timestamp?.gte ? Prisma.sql`AND t."timestamp" >= ${whereClause.timestamp.gte}` : Prisma.empty}
+        ${whereClause.timestamp?.lte ? Prisma.sql`AND t."timestamp" <= ${whereClause.timestamp.lte}` : Prisma.empty}
+        GROUP BY DATE(t."timestamp")
+        ORDER BY DATE(t."timestamp") DESC
         LIMIT 30
-      `)
+      `
     } else if (period === 'weekly') {
-      // Get weekly data for the last 12 weeks
-      timeSeriesData = await prisma.$queryRawUnsafe(`
+      timeSeriesData = await prisma.$queryRaw`
         SELECT
-          TO_CHAR(DATE_TRUNC('week', timestamp), 'YYYY-IW') as week,
+          TO_CHAR(DATE_TRUNC('week', t."timestamp"), 'YYYY-IW') as week,
           COUNT(*)::integer as transactions,
-          COALESCE(SUM(amount), 0)::numeric as amount,
-          COALESCE(SUM(commission_amount), 0)::numeric as commission
-        FROM transactions
-        WHERE timestamp >= NOW() - INTERVAL '12 weeks'
-        GROUP BY DATE_TRUNC('week', timestamp)
-        ORDER BY DATE_TRUNC('week', timestamp) DESC
+          COALESCE(SUM(t."amount"), 0)::numeric as amount,
+          COALESCE(SUM(t."commissionAmount"), 0)::numeric as commission
+        FROM "transactions" t
+        WHERE 1=1
+        ${
+          whereClause.agentId
+            ? Prisma.sql`AND t."agentId" IN (${Prisma.join(
+                Array.isArray(whereClause.agentId.in) ? whereClause.agentId.in : [whereClause.agentId]
+              )})`
+            : Prisma.empty
+        }
+        ${whereClause.type ? Prisma.sql`AND t."type" = ${whereClause.type}` : Prisma.empty}
+        ${whereClause.timestamp?.gte ? Prisma.sql`AND t."timestamp" >= ${whereClause.timestamp.gte}` : Prisma.empty}
+        ${whereClause.timestamp?.lte ? Prisma.sql`AND t."timestamp" <= ${whereClause.timestamp.lte}` : Prisma.empty}
+        GROUP BY DATE_TRUNC('week', t."timestamp")
+        ORDER BY DATE_TRUNC('week', t."timestamp") DESC
         LIMIT 12
-      `)
+      `
     } else {
-      // Get monthly data for the last 12 months
-      timeSeriesData = await prisma.$queryRawUnsafe(`
+      timeSeriesData = await prisma.$queryRaw`
         SELECT
-          TO_CHAR(DATE_TRUNC('month', timestamp), 'YYYY-MM') as month,
+          TO_CHAR(DATE_TRUNC('month', t."timestamp"), 'YYYY-MM') as month,
           COUNT(*)::integer as transactions,
-          COALESCE(SUM(amount), 0)::numeric as amount,
-          COALESCE(SUM(commission_amount), 0)::numeric as commission
-        FROM transactions
-        WHERE timestamp >= NOW() - INTERVAL '12 months'
-        GROUP BY DATE_TRUNC('month', timestamp)
-        ORDER BY DATE_TRUNC('month', timestamp) DESC
+          COALESCE(SUM(t."amount"), 0)::numeric as amount,
+          COALESCE(SUM(t."commissionAmount"), 0)::numeric as commission
+        FROM "transactions" t
+        WHERE 1=1
+        ${
+          whereClause.agentId
+            ? Prisma.sql`AND t."agentId" IN (${Prisma.join(
+                Array.isArray(whereClause.agentId.in) ? whereClause.agentId.in : [whereClause.agentId]
+              )})`
+            : Prisma.empty
+        }
+        ${whereClause.type ? Prisma.sql`AND t."type" = ${whereClause.type}` : Prisma.empty}
+        ${whereClause.timestamp?.gte ? Prisma.sql`AND t."timestamp" >= ${whereClause.timestamp.gte}` : Prisma.empty}
+        ${whereClause.timestamp?.lte ? Prisma.sql`AND t."timestamp" <= ${whereClause.timestamp.lte}` : Prisma.empty}
+        GROUP BY DATE_TRUNC('month', t."timestamp")
+        ORDER BY DATE_TRUNC('month', t."timestamp") DESC
         LIMIT 12
-      `)
-    }
-
-    const analyticsData: AnalyticsData = {
-      period: period as string,
-      transactionType: transactionType as string,
-      data: {
-        totalTransactions: stats._count.id || 0,
-        totalAmount: Number(stats._sum.amount) || 0,
-        totalCommission: Number(stats._sum.commissionAmount) || 0,
-        avgTransactionAmount: Number(stats._avg.amount) || 0
-      }
-    }
-
-    // Add time series data based on period
-    if (period === 'daily') {
-      analyticsData.data.dailyData = timeSeriesData
-    } else if (period === 'weekly') {
-      analyticsData.data.weeklyData = timeSeriesData
-    } else {
-      analyticsData.data.monthlyData = timeSeriesData
+      `
     }
 
     res.status(200).json({
       success: true,
       data: {
-        ...analyticsData,
-        userCounts
+        totalTransactions: stats._count.id || 0,
+        totalAmount: Number(stats._sum?.amount || 0),
+        totalCommission: Number(stats._sum?.commissionAmount || 0),
+        avgTransactionAmount: Number(stats._avg?.amount || 0),
+        userCounts,
+        timeSeriesData
       }
     })
   } catch (error) {

@@ -1,4 +1,3 @@
-// ** React Imports
 import { useState, useEffect, useCallback } from 'react'
 
 // ** MUI Imports
@@ -34,7 +33,12 @@ const AgentCommissionDashboard = () => {
   const fetchCommissionData = useCallback(async () => {
     try {
       setLoading(true)
-      const response = await fetch(`/api/commissions/monthly?period=${selectedPeriod}`)
+      const token = localStorage.getItem('accessToken')
+      const response = await fetch(`/api/commissions/monthly?period=${selectedPeriod}`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      })
       if (!response.ok) {
         throw new Error('Failed to fetch commission data')
       }
@@ -54,15 +58,12 @@ const AgentCommissionDashboard = () => {
   const getCurrentMonthCommission = () => {
     if (!commissionData?.calculations) return null
 
-    // In a real app, this would be filtered by the current user's agent ID
-    // For demo purposes, showing the first commission as example
     return commissionData.calculations[0] || null
   }
 
   const getPeriodOptions = () => {
     const options = []
     const now = new Date()
-
     for (let i = 0; i < 12; i++) {
       const date = new Date(now.getFullYear(), now.getMonth() - i, 1)
       const period = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
@@ -81,18 +82,11 @@ const AgentCommissionDashboard = () => {
             <CardHeader title='Commission Dashboard' />
             <CardContent>
               <Grid container spacing={4}>
-                <Grid item xs={12} sm={6} md={3}>
-                  <Skeleton variant='rectangular' height={100} />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <Skeleton variant='rectangular' height={100} />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <Skeleton variant='rectangular' height={100} />
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <Skeleton variant='rectangular' height={100} />
-                </Grid>
+                {[...Array(4)].map((_, i) => (
+                  <Grid item xs={12} sm={6} md={3} key={i}>
+                    <Skeleton variant='rectangular' height={100} />
+                  </Grid>
+                ))}
               </Grid>
             </CardContent>
           </Card>
@@ -129,7 +123,6 @@ const AgentCommissionDashboard = () => {
 
             {commissionData ? (
               <>
-                {/* Commission Summary Cards */}
                 <Grid container spacing={4} sx={{ mb: 6 }}>
                   <Grid item xs={12} sm={6} md={3}>
                     <Card sx={{ textAlign: 'center', p: 3 }}>
@@ -180,7 +173,6 @@ const AgentCommissionDashboard = () => {
                   </Grid>
                 </Grid>
 
-                {/* Commission Breakdown */}
                 <Grid container spacing={4}>
                   <Grid item xs={12}>
                     <Card>
@@ -239,7 +231,6 @@ const AgentCommissionDashboard = () => {
                   </Grid>
                 </Grid>
 
-                {/* Performance Insights */}
                 <Grid container spacing={4} sx={{ mt: 2 }}>
                   <Grid item xs={12}>
                     <Alert severity='info'>

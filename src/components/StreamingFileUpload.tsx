@@ -1,31 +1,6 @@
-import React, { useState, useCallback, useRef } from 'react'
+import React, { useState, useCallback, useRef, useEffect } from 'react'
 import Papa from 'papaparse'
-import {
-  Box,
-  Button,
-  Typography,
-  LinearProgress,
-  Alert,
-  Card,
-  CardContent,
-  Grid,
-  Chip,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Paper,
-  Pagination,
-  TextField,
-  InputAdornment,
-  IconButton,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions
-} from '@mui/material'
+import { Box, Button, Typography, LinearProgress, Alert, Card, CardContent, Chip } from '@mui/material'
 import Icon from 'src/@core/components/icon'
 
 interface UploadProgress {
@@ -51,40 +26,76 @@ interface UploadResult {
     newAgents?: number
     processingTime?: number
   }
-}
-
-interface PaginatedData {
-  data: any[]
-  headers: string[]
-  pagination: {
-    page: number
-    limit: number
-    total: number
-    totalPages: number
-  }
-  summary?: {
-    totalRows: number
-    columns: number
-    fileSize: string
-  }
+  errors?: Array<{ transaction: string; error: string }>
 }
 
 const CHUNK_SIZE = 800 * 1024
-const ROWS_PER_PAGE = 100
-const BATCH_SIZE = 1000 // Reduced from 10000 to 2000 - this actually works
+const BATCH_SIZE = 1000
 
 interface StreamingFileUploadProps {
+  onUploadStart?: () => void
   onUploadComplete?: (result: UploadResult) => void
+  onUploadProgress?: (progress: number) => void
   onError?: (error: string) => void
   acceptedFileTypes?: string[]
   maxFileSize?: number
+  autoStart?: boolean
+}
+
+// Helper function to parse date in DD/MM/YYYY format
+const parseDate = (dateStr: string): Date => {
+  if (!dateStr) return new Date()
+
+  try {
+    // Handle format like "01/10/2025 0:00" or "01/10/2025 10:30"
+    const parts = dateStr.split(' ')
+    const datePart = parts[0]
+
+    if (datePart.includes('/')) {
+      const dateParts = datePart.split('/')
+      if (dateParts.length === 3) {
+        // parts[0] = day, parts[1] = month, parts[2] = year
+        const day = parseInt(dateParts[0], 10)
+        const month = parseInt(dateParts[1], 10) - 1 // Month is 0-indexed in JS
+        const year = parseInt(dateParts[2], 10)
+
+        // Check if there's time part
+        if (parts.length > 1) {
+          const timePart = parts[1]
+          if (timePart.includes(':')) {
+            const timeParts = timePart.split(':')
+            if (timeParts.length >= 2) {
+              const hours = parseInt(timeParts[0], 10)
+              const minutes = parseInt(timeParts[1], 10)
+
+              return new Date(year, month, day, hours, minutes)
+            }
+          }
+        }
+
+        return new Date(year, month, day)
+      }
+    }
+
+    // Fallback to default parsing
+    const fallbackDate = new Date(dateStr)
+
+    return isNaN(fallbackDate.getTime()) ? new Date() : fallbackDate
+  } catch (error) {
+    console.error('Error parsing date:', dateStr, error)
+
+    return new Date()
+  }
 }
 
 const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
+  onUploadStart,
   onUploadComplete,
+  onUploadProgress,
   onError,
   acceptedFileTypes = ['.csv'],
-  maxFileSize = 1024 * 1024 * 1024
+  maxFileSize = 500 * 1024 * 1024, // 500MB default
+  autoStart = true
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -92,10 +103,14 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null)
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
   const [error, setError] = useState<string>('')
-  const [previewData, setPreviewData] = useState<PaginatedData | null>(null)
-  const [currentPage, setCurrentPage] = useState(1)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [showPreviewDialog, setShowPreviewDialog] = useState(false)
+  const [parsedTransactions, setParsedTransactions] = useState<any[] | null>(null)
+
+  // Auto-start upload when file is selected if autoStart is true
+  useEffect(() => {
+    if (selectedFile && autoStart && !isUploading && !uploadResult) {
+      handleUpload()
+    }
+  }, [selectedFile, autoStart, isUploading, uploadResult])
 
   const handleFileSelect = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -119,6 +134,7 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
       setError('')
       setUploadResult(null)
       setUploadProgress(null)
+      setParsedTransactions(null)
     },
     [acceptedFileTypes, maxFileSize]
   )
@@ -149,7 +165,13 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
       lowerNarration.includes('deposit') ||
       lowerNarration.includes('kuweka') ||
       lowerNarration.includes('malipo') ||
-      lowerNarration.includes('dep')
+      lowerNarration.includes('dep') ||
+      lowerNarration.includes('dp') ||
+      lowerNarration.includes('depost') ||
+      lowerNarration.includes('weka') ||
+      lowerNarration.includes('sav') ||
+      lowerNarration.includes('akiba') ||
+      lowerNarration.includes('aki')
     ) {
       return 'deposit'
     }
@@ -159,186 +181,225 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
       lowerNarration.includes('withdrawal') ||
       lowerNarration.includes('kutoa') ||
       lowerNarration.includes('withdraw') ||
+      lowerNarration.includes('draw') ||
       lowerNarration.includes('toa')
     ) {
       return 'withdrawal'
     }
 
+    // keyword for transfer
+    if (
+      lowerNarration.includes('transfer') ||
+      lowerNarration.includes('kutuma') ||
+      lowerNarration.includes('tuma') ||
+      lowerNarration.includes('trans')
+    ) {
+      return 'transfer'
+    }
+
+    // keyword for payments
+    if (
+      lowerNarration.includes('malipo') ||
+      lowerNarration.includes('lip') ||
+      lowerNarration.includes('payment') ||
+      lowerNarration.includes('ada') ||
+      lowerNarration.includes('fees')
+    ) {
+      return 'payment'
+    }
+
     // Fallback to column-based detection
-    if (hasDebit) return 'withdrawal'
-    if (hasCredit) return 'deposit'
+    if (hasDebit) return 'deposit'
+    if (hasCredit) return 'withdraw'
 
     return 'transfer'
   }
 
-  const uploadFile = useCallback(async (file: File): Promise<UploadResult> => {
-    const fileId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    const startTime = Date.now()
+  const uploadFile = useCallback(
+    async (file: File): Promise<UploadResult> => {
+      const fileId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      const startTime = Date.now()
 
-    try {
-      setUploadProgress({
-        stage: 'parsing',
-        progress: 5,
-        bytesUploaded: 0,
-        totalBytes: file.size,
-        chunksUploaded: 0,
-        totalChunks: Math.ceil(file.size / CHUNK_SIZE),
-        processingRate: 0,
-        estimatedTimeRemaining: 0,
-        errors: []
-      })
-
-      // Parse CSV
-      const fileContent = await file.text()
-
-      setUploadProgress(prev => (prev ? { ...prev, progress: 15 } : null))
-
-      const parseResult = Papa.parse(fileContent, {
-        header: true,
-        skipEmptyLines: true,
-        transformHeader: header => header.trim().toUpperCase(),
-        transform: value => value?.toString().trim() || ''
-      })
-
-      if (!parseResult.data || parseResult.data.length === 0) {
-        throw new Error('No data found in CSV file')
-      }
-
-      setUploadProgress(prev => (prev ? { ...prev, progress: 25 } : null))
-
-      // Convert to transactions
-      const transactions = parseResult.data
-        .map((row: any, index: number) => {
-          const narration = row.NARRATION || ''
-          const refMatch = narration.match(/REF:([a-f0-9]+)/i)
-          const transactionId = refMatch ? refMatch[1] : `TXN_${Date.now()}_${index}`
-
-          const amountDebit = row.AMOUNTDEBIT || '0'
-          const amountCredit = row.AMOUNTCREDIT || '0'
-
-          // Determine amount
-          let amount = 0
-          if (amountDebit && parseFloat(amountDebit.replace(/,/g, '')) > 0) {
-            amount = parseFloat(amountDebit.replace(/,/g, ''))
-          } else if (amountCredit && parseFloat(amountCredit.replace(/,/g, '')) > 0) {
-            amount = parseFloat(amountCredit.replace(/,/g, ''))
-          }
-
-          const type = determineTransactionType(narration, amountDebit, amountCredit)
-
-          return {
-            id: transactionId,
-            agentName: row.AGENTSNAME || '',
-            agentId: row.AGNTACCNT || '',
-            branchCode: row.BRC || '',
-            branchName: row.BRCHNAME || '',
-            customerName: row.CSTMNAME || 'Unknown Customer',
-            customerAccount: formatCustomerAccount(row.CSTMACCNT || ''),
-            amount: amount,
-            narration: narration,
-            channel: row.CHANNEL || 'AGENCY',
-            timestamp: row.TRXDATE || new Date().toISOString(),
-            type: type
-          }
+      try {
+        // Stage 1: Parsing
+        setUploadProgress({
+          stage: 'parsing',
+          progress: 5,
+          bytesUploaded: 0,
+          totalBytes: file.size,
+          chunksUploaded: 0,
+          totalChunks: Math.ceil(file.size / CHUNK_SIZE),
+          processingRate: 0,
+          estimatedTimeRemaining: 0,
+          errors: []
         })
-        .filter(t => t.agentId && t.agentName && t.amount > 0)
+        onUploadProgress?.(5)
 
-      if (transactions.length === 0) {
-        throw new Error('No valid transactions found in CSV')
-      }
+        // Parse CSV
+        const fileContent = await file.text()
 
-      console.log(`✅ Parsed ${transactions.length} valid transactions`)
+        setUploadProgress(prev => (prev ? { ...prev, progress: 15 } : null))
+        onUploadProgress?.(15)
 
-      setUploadProgress({
-        stage: 'uploading',
-        progress: 30,
-        bytesUploaded: file.size,
-        totalBytes: file.size,
-        chunksUploaded: Math.ceil(file.size / CHUNK_SIZE),
-        totalChunks: Math.ceil(file.size / CHUNK_SIZE),
-        processingRate: 0,
-        estimatedTimeRemaining: 0,
-        errors: []
-      })
+        const parseResult = Papa.parse(fileContent, {
+          header: true,
+          skipEmptyLines: true,
+          transformHeader: header => header.trim().toUpperCase(),
+          transform: value => value?.toString().trim() || ''
+        })
 
-      // Send in reasonably sized batches
-      let totalCreated = 0
-      let totalSkipped = 0
-      let totalNewAgents = 0
-      const allErrors = []
+        if (!parseResult.data || parseResult.data.length === 0) {
+          throw new Error('No data found in CSV file')
+        }
 
-      const totalBatches = Math.ceil(transactions.length / BATCH_SIZE)
+        setUploadProgress(prev => (prev ? { ...prev, progress: 25 } : null))
+        onUploadProgress?.(25)
 
-      for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-        const start = batchIndex * BATCH_SIZE
-        const batch = transactions.slice(start, start + BATCH_SIZE)
+        // Convert to transactions with proper date parsing
+        const transactions = parseResult.data
+          .map((row: any, index: number) => {
+            const narration = row.NARRATION || ''
+            const refMatch = narration.match(/REF:([a-f0-9]+)/i)
+            const transactionId = refMatch ? refMatch[1] : `TXN_${Date.now()}_${index}`
 
-        console.log(`Sending batch ${batchIndex + 1}/${totalBatches} with ${batch.length} transactions`)
+            const amountDebit = row.AMOUNTDEBIT || '0'
+            const amountCredit = row.AMOUNTCREDIT || '0'
 
-        const response = await fetch('/api/transactions/import', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
+            // Determine amount
+            let amount = 0
+            if (amountDebit && parseFloat(amountDebit.replace(/,/g, '')) > 0) {
+              amount = parseFloat(amountDebit.replace(/,/g, ''))
+            } else if (amountCredit && parseFloat(amountCredit.replace(/,/g, '')) > 0) {
+              amount = parseFloat(amountCredit.replace(/,/g, ''))
+            }
+
+            const type = determineTransactionType(narration, amountDebit, amountCredit)
+
+            // Parse the date correctly (DD/MM/YYYY format)
+            const parsedDate = parseDate(row.TRXDATE || '')
+
+            return {
+              id: transactionId,
+              agentName: row.AGENTSNAME || '',
+              agentId: row.AGNTACCNT || '',
+              branchCode: row.BRC || '',
+              branchName: row.BRCHNAME || '',
+              customerName: row.CSTMNAME || 'Unknown Customer',
+              customerAccount: formatCustomerAccount(row.CSTMACCNT || ''),
+              amount: amount,
+              narration: narration,
+              channel: row.CHANNEL || 'AGENCY',
+              timestamp: parsedDate.toISOString(),
+              type: type
+            }
+          })
+          .filter(t => t.agentId && t.agentName && t.amount > 0)
+
+        if (transactions.length === 0) {
+          throw new Error('No valid transactions found in CSV')
+        }
+
+        setParsedTransactions(transactions)
+
+        // Stage 2: Uploading
+        setUploadProgress({
+          stage: 'uploading',
+          progress: 30,
+          bytesUploaded: file.size,
+          totalBytes: file.size,
+          chunksUploaded: Math.ceil(file.size / CHUNK_SIZE),
+          totalChunks: Math.ceil(file.size / CHUNK_SIZE),
+          processingRate: 0,
+          estimatedTimeRemaining: 0,
+          errors: []
+        })
+        onUploadProgress?.(30)
+
+        // Send in reasonably sized batches
+        let totalCreated = 0
+        let totalSkipped = 0
+        let totalNewAgents = 0
+        const allErrors: Array<{ transaction: string; error: string }> = []
+
+        const totalBatches = Math.ceil(transactions.length / BATCH_SIZE)
+
+        for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+          const start = batchIndex * BATCH_SIZE
+          const batch = transactions.slice(start, start + BATCH_SIZE)
+
+          console.log(`Sending batch ${batchIndex + 1}/${totalBatches} with ${batch.length} transactions`)
+
+          const response = await fetch('/api/transactions/import', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ transactions: batch })
+          })
+
+          if (!response.ok) {
+            const errorText = await response.text()
+            console.error('Batch failed:', errorText)
+            throw new Error(`Import failed at batch ${batchIndex + 1}: ${response.status}`)
+          }
+
+          const result = await response.json()
+
+          totalCreated += result.stats?.created || 0
+          totalSkipped += result.stats?.skipped || 0
+          totalNewAgents += result.stats?.newAgents || 0
+
+          if (result.errors && result.errors.length > 0) {
+            allErrors.push(...result.errors)
+          }
+
+          const progress = 30 + Math.floor(((batchIndex + 1) / totalBatches) * 65)
+          setUploadProgress(prev => (prev ? { ...prev, progress } : null))
+          onUploadProgress?.(progress)
+        }
+
+        // Stage 3: Completed
+        setUploadProgress({
+          stage: 'completed',
+          progress: 100,
+          bytesUploaded: file.size,
+          totalBytes: file.size,
+          chunksUploaded: Math.ceil(file.size / CHUNK_SIZE),
+          totalChunks: Math.ceil(file.size / CHUNK_SIZE),
+          processingRate: 0,
+          estimatedTimeRemaining: 0,
+          errors: allErrors
+        })
+        onUploadProgress?.(100)
+
+        const processingTime = (Date.now() - startTime) / 1000
+
+        return {
+          success: true,
+          message: `✅ ${totalCreated} created, ${totalSkipped} skipped`,
+          fileId,
+          stats: {
+            total: transactions.length,
+            created: totalCreated,
+            skipped: totalSkipped,
+            newAgents: totalNewAgents,
+            processingTime
           },
-          body: JSON.stringify({ transactions: batch })
-        })
-
-        if (!response.ok) {
-          const errorText = await response.text()
-          console.error('Batch failed:', errorText)
-          throw new Error(`Import failed at batch ${batchIndex + 1}: ${response.status}`)
+          errors: allErrors
         }
-
-        const result = await response.json()
-
-        totalCreated += result.stats?.created || 0
-        totalSkipped += result.stats?.skipped || 0
-        totalNewAgents += result.stats?.newAgents || 0
-
-        if (result.errors) {
-          allErrors.push(...result.errors)
-        }
-
-        const progress = 30 + Math.floor(((batchIndex + 1) / totalBatches) * 65)
-        setUploadProgress(prev => (prev ? { ...prev, progress } : null))
+      } catch (error) {
+        console.error('Upload error:', error)
+        throw error
       }
-
-      setUploadProgress({
-        stage: 'completed',
-        progress: 100,
-        bytesUploaded: file.size,
-        totalBytes: file.size,
-        chunksUploaded: Math.ceil(file.size / CHUNK_SIZE),
-        totalChunks: Math.ceil(file.size / CHUNK_SIZE),
-        processingRate: 0,
-        estimatedTimeRemaining: 0,
-        errors: allErrors
-      })
-
-      const processingTime = (Date.now() - startTime) / 1000
-
-      return {
-        success: true,
-        message: `✅ ${totalCreated} created, ${totalSkipped} skipped`,
-        fileId,
-        stats: {
-          total: transactions.length,
-          created: totalCreated,
-          skipped: totalSkipped,
-          newAgents: totalNewAgents,
-          processingTime
-        }
-      }
-    } catch (error) {
-      console.error('Upload error:', error)
-      throw error
-    }
-  }, [])
+    },
+    [onUploadProgress]
+  )
 
   const handleUpload = useCallback(async () => {
     if (!selectedFile) return
 
     setIsUploading(true)
+    onUploadStart?.()
     setError('')
     setUploadProgress(null)
     setUploadResult(null)
@@ -352,58 +413,37 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
       console.error('Upload error:', errorMessage)
       setError(errorMessage)
       onError?.(errorMessage)
+
+      setUploadProgress({
+        stage: 'error',
+        progress: 0,
+        bytesUploaded: 0,
+        totalBytes: selectedFile.size,
+        chunksUploaded: 0,
+        totalChunks: Math.ceil(selectedFile.size / CHUNK_SIZE),
+        processingRate: 0,
+        estimatedTimeRemaining: 0,
+        errors: [errorMessage]
+      })
     } finally {
       setIsUploading(false)
     }
-  }, [selectedFile, uploadFile, onUploadComplete, onError])
+  }, [selectedFile, uploadFile, onUploadStart, onUploadComplete, onError])
 
-  const loadPreviewData = useCallback(
-    async (page = 1, search = '') => {
-      if (!uploadResult?.fileId) return
+  const handleBrowseClick = () => {
+    fileInputRef.current?.click()
+  }
 
-      try {
-        const response = await fetch(
-          `/api/files/preview-data?fileId=${
-            uploadResult.fileId
-          }&page=${page}&limit=${ROWS_PER_PAGE}&search=${encodeURIComponent(search)}`
-        )
-        if (!response.ok) {
-          throw new Error(`Failed to load preview data`)
-        }
-
-        const data: PaginatedData = await response.json()
-        setPreviewData(data)
-      } catch (error) {
-        console.error('Failed to load preview data:', error)
-      }
-    },
-    [uploadResult]
-  )
-
-  const handlePageChange = useCallback(
-    (event: React.ChangeEvent<unknown>, value: number) => {
-      setCurrentPage(value)
-      loadPreviewData(value, searchQuery)
-    },
-    [loadPreviewData, searchQuery]
-  )
-
-  const handleSearchChange = useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      const query = event.target.value
-      setSearchQuery(query)
-      setCurrentPage(1)
-      loadPreviewData(1, query)
-    },
-    [loadPreviewData]
-  )
-
-  const showPreview = useCallback(() => {
-    if (uploadResult?.success) {
-      setShowPreviewDialog(true)
-      loadPreviewData(1, '')
+  const handleReset = () => {
+    setSelectedFile(null)
+    setError('')
+    setUploadResult(null)
+    setUploadProgress(null)
+    setParsedTransactions(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
     }
-  }, [uploadResult, loadPreviewData])
+  }
 
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 Bytes'
@@ -422,223 +462,214 @@ const StreamingFileUpload: React.FC<StreamingFileUploadProps> = ({
         return 'info'
       case 'uploading':
         return 'primary'
+      case 'error':
+        return 'error'
       default:
         return 'default'
     }
   }
 
+  const getStageMessage = (stage: string, progress: number) => {
+    if (stage === 'parsing') return 'Parsing CSV file...'
+    if (stage === 'uploading') {
+      if (progress < 50) return 'Uploading transactions...'
+      if (progress < 80) return 'Processing transactions...'
+
+      return 'Finalizing...'
+    }
+    if (stage === 'completed') return 'Upload complete!'
+    if (stage === 'error') return 'Upload failed'
+
+    return 'Processing...'
+  }
+
   return (
-    <Box sx={{ p: 3 }}>
+    <Box>
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type='file'
+        accept={acceptedFileTypes.join(',')}
+        onChange={handleFileSelect}
+        style={{ display: 'none' }}
+      />
+
+      {/* File selection area */}
+      {!selectedFile && !isUploading && !uploadResult && (
+        <Box
+          sx={{
+            textAlign: 'center',
+            py: 8,
+            px: 4,
+            border: '2px dashed',
+            borderColor: 'grey.300',
+            borderRadius: 2,
+            bgcolor: 'grey.50',
+            cursor: 'pointer',
+            '&:hover': {
+              borderColor: 'primary.main',
+              bgcolor: 'grey.100'
+            }
+          }}
+          onClick={handleBrowseClick}
+        >
+          <Icon icon='tabler:upload' fontSize={48} color='action' />
+          <Typography variant='h6' sx={{ mt: 2 }}>
+            Click to browse or drag and drop
+          </Typography>
+          <Typography variant='body2' color='text.secondary' sx={{ mt: 1 }}>
+            Supported formats: {acceptedFileTypes.join(', ')} (Max: {formatFileSize(maxFileSize)})
+          </Typography>
+        </Box>
+      )}
+
+      {/* Selected file info */}
+      {selectedFile && !isUploading && !uploadResult && !error && (
+        <Card variant='outlined'>
+          <CardContent>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Icon icon='tabler:file-text' fontSize={32} color='primary' />
+                <Box>
+                  <Typography variant='subtitle1'>{selectedFile.name}</Typography>
+                  <Typography variant='caption' color='text.secondary'>
+                    {formatFileSize(selectedFile.size)}
+                  </Typography>
+                </Box>
+              </Box>
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                <Button
+                  variant='outlined'
+                  color='secondary'
+                  size='small'
+                  onClick={handleReset}
+                  startIcon={<Icon icon='tabler:x' />}
+                >
+                  Cancel
+                </Button>
+                {!autoStart && (
+                  <Button
+                    variant='contained'
+                    size='small'
+                    onClick={handleUpload}
+                    disabled={isUploading}
+                    startIcon={<Icon icon='tabler:upload' />}
+                  >
+                    Upload Now
+                  </Button>
+                )}
+              </Box>
+            </Box>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Error display */}
       {error && (
-        <Alert severity='error' sx={{ mb: 2 }} onClose={() => setError('')}>
+        <Alert
+          severity='error'
+          sx={{ mt: 2 }}
+          action={
+            <Button color='inherit' size='small' onClick={handleReset}>
+              Try Again
+            </Button>
+          }
+        >
           {error}
         </Alert>
       )}
 
-      {uploadResult && uploadResult.success && (
-        <Alert severity='success' sx={{ mb: 2 }} onClose={() => setUploadResult(null)}>
-          <Typography variant='subtitle2'>{uploadResult.message}</Typography>
-          {uploadResult.stats && (
-            <Box sx={{ mt: 1 }}>
-              <Typography variant='body2'>Total rows: {uploadResult.stats.total?.toLocaleString()}</Typography>
-              <Typography variant='body2' color='success.main'>
-                Created: {uploadResult.stats.created?.toLocaleString()}
-              </Typography>
-              <Typography variant='body2' color='warning.main'>
-                Skipped: {uploadResult.stats.skipped?.toLocaleString()}
-              </Typography>
-              <Typography variant='body2' color='info.main'>
-                New agents: {uploadResult.stats.newAgents?.toLocaleString()}
-              </Typography>
-              <Typography variant='body2'>Time: {uploadResult.stats.processingTime?.toFixed(2)}s</Typography>
-            </Box>
-          )}
-        </Alert>
-      )}
-
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={6}>
-          <Card>
+      {/* Upload progress */}
+      {uploadProgress && (
+        <Box sx={{ mt: 3 }}>
+          <Card variant='outlined'>
             <CardContent>
-              <Typography variant='h6' gutterBottom>
-                File Upload
-              </Typography>
-
-              <input
-                ref={fileInputRef}
-                type='file'
-                accept={acceptedFileTypes.join(',')}
-                onChange={handleFileSelect}
-                style={{ display: 'none' }}
-              />
-
-              <Box sx={{ mb: 2 }}>
-                <TextField
-                  fullWidth
-                  label='Selected File'
-                  value={selectedFile?.name || ''}
-                  placeholder='No file selected'
-                  InputProps={{
-                    readOnly: true,
-                    endAdornment: (
-                      <InputAdornment position='end'>
-                        <IconButton
-                          onClick={() => fileInputRef.current?.click()}
-                          disabled={isUploading}
-                          color='primary'
-                        >
-                          <Icon icon='tabler:folder-open' />
-                        </IconButton>
-                      </InputAdornment>
-                    )
-                  }}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                <Icon
+                  icon={
+                    uploadProgress.stage === 'completed'
+                      ? 'tabler:check-circle'
+                      : uploadProgress.stage === 'error'
+                      ? 'tabler:alert-circle'
+                      : 'tabler:cloud-upload'
+                  }
+                  fontSize={32}
+                  color={
+                    uploadProgress.stage === 'completed'
+                      ? 'success'
+                      : uploadProgress.stage === 'error'
+                      ? 'error'
+                      : 'primary'
+                  }
+                />
+                <Box sx={{ flex: 1 }}>
+                  <Typography variant='subtitle1'>
+                    {getStageMessage(uploadProgress.stage, uploadProgress.progress)}
+                  </Typography>
+                  <Typography variant='caption' color='text.secondary'>
+                    {uploadProgress.stage === 'parsing' && 'Reading and validating CSV data...'}
+                    {uploadProgress.stage === 'uploading' &&
+                      `Processing batch ${Math.floor(
+                        (uploadProgress.progress / 100) * (uploadProgress.totalChunks || 1)
+                      )} of ${uploadProgress.totalChunks || 1}`}
+                    {uploadProgress.stage === 'completed' && 'All transactions have been processed'}
+                  </Typography>
+                </Box>
+                <Chip
+                  label={`${Math.round(uploadProgress.progress)}%`}
+                  size='small'
+                  color={getStageColor(uploadProgress.stage) as any}
                 />
               </Box>
 
-              {selectedFile && (
-                <Box sx={{ mb: 2 }}>
-                  <Typography variant='body2' color='text.secondary'>
-                    File size: {formatFileSize(selectedFile.size)}
-                  </Typography>
-                </Box>
-              )}
-
-              <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
-                <Button
-                  variant='contained'
-                  startIcon={<Icon icon='tabler:upload' />}
-                  onClick={handleUpload}
-                  disabled={isUploading || !selectedFile}
-                  fullWidth
-                >
-                  {isUploading ? 'Uploading...' : 'Upload File'}
-                </Button>
-
-                {uploadResult?.success && (
-                  <Button variant='outlined' startIcon={<Icon icon='tabler:eye' />} onClick={showPreview}>
-                    Preview
-                  </Button>
-                )}
-              </Box>
-
-              {uploadProgress && (
-                <Box sx={{ mb: 2 }}>
-                  <Typography variant='body2' gutterBottom>
-                    <strong>Stage:</strong> {uploadProgress.stage}
-                    <Chip
-                      label={`${uploadProgress.progress.toFixed(1)}%`}
-                      size='small'
-                      color={getStageColor(uploadProgress.stage) as any}
-                      sx={{ ml: 1 }}
-                    />
-                  </Typography>
-                  <LinearProgress variant='determinate' value={uploadProgress.progress} sx={{ mb: 1 }} />
-                </Box>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} md={6}>
-          <Card>
-            <CardContent>
-              <Typography variant='h6' gutterBottom>
-                Upload Settings
-              </Typography>
-              <Box sx={{ mb: 2 }}>
-                <Typography variant='body2' color='text.secondary' gutterBottom>
-                  Batch Size: {BATCH_SIZE} transactions per request
-                </Typography>
-                <Typography variant='body2' color='text.secondary' gutterBottom>
-                  Max File Size: {formatFileSize(maxFileSize)}
-                </Typography>
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-
-      <Dialog open={showPreviewDialog} onClose={() => setShowPreviewDialog(false)} maxWidth='lg' fullWidth>
-        <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Typography variant='h6'>Data Preview</Typography>
-            <IconButton onClick={() => setShowPreviewDialog(false)}>
-              <Icon icon='tabler:x' />
-            </IconButton>
-          </Box>
-        </DialogTitle>
-        <DialogContent>
-          {previewData && (
-            <Box>
-              <TextField
-                fullWidth
-                label='Search'
-                value={searchQuery}
-                onChange={handleSearchChange}
-                sx={{ mb: 2 }}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position='start'>
-                      <Icon icon='tabler:search' />
-                    </InputAdornment>
-                  )
+              <LinearProgress
+                variant='determinate'
+                value={uploadProgress.progress}
+                sx={{
+                  height: 8,
+                  borderRadius: 4,
+                  bgcolor: 'grey.200',
+                  '& .MuiLinearProgress-bar': {
+                    borderRadius: 4
+                  }
                 }}
               />
 
-              {previewData.summary && (
-                <Box sx={{ mb: 2, p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
-                  <Typography variant='body2' color='text.secondary'>
-                    Total Rows: {previewData.summary.totalRows?.toLocaleString()}
-                  </Typography>
-                  <Typography variant='body2' color='text.secondary'>
-                    Columns: {previewData.summary.columns}
-                  </Typography>
-                  <Typography variant='body2' color='text.secondary'>
-                    File Size: {previewData.summary.fileSize}
-                  </Typography>
+              {uploadProgress.stage === 'uploading' && parsedTransactions && (
+                <Box sx={{ mt: 2, display: 'flex', gap: 3, justifyContent: 'center' }}>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography variant='h6' color='primary'>
+                      {parsedTransactions.length.toLocaleString()}
+                    </Typography>
+                    <Typography variant='caption' color='text.secondary'>
+                      Total Transactions
+                    </Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography variant='h6' color='success.main'>
+                      {Math.round(((uploadProgress.progress - 30) / 65) * 100)}%
+                    </Typography>
+                    <Typography variant='caption' color='text.secondary'>
+                      Upload Progress
+                    </Typography>
+                  </Box>
                 </Box>
               )}
 
-              <TableContainer component={Paper} sx={{ maxHeight: 400 }}>
-                <Table stickyHeader size='small'>
-                  <TableHead>
-                    <TableRow>
-                      {previewData.headers.map((header, index) => (
-                        <TableCell key={index} sx={{ fontWeight: 'bold' }}>
-                          {header}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {previewData.data.map((row, rowIndex) => (
-                      <TableRow key={rowIndex}>
-                        {previewData.headers.map((header, colIndex) => (
-                          <TableCell key={colIndex}>{row[header] || ''}</TableCell>
-                        ))}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-
-              {previewData.pagination.totalPages > 1 && (
-                <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
-                  <Pagination
-                    count={previewData.pagination.totalPages}
-                    page={currentPage}
-                    onChange={handlePageChange}
-                    color='primary'
-                  />
-                </Box>
+              {uploadProgress.errors && uploadProgress.errors.length > 0 && (
+                <Alert severity='warning' sx={{ mt: 2 }}>
+                  <Typography variant='subtitle2'>Errors encountered:</Typography>
+                  {uploadProgress.errors.slice(0, 3).map((err, idx) => (
+                    <Typography key={idx} variant='caption' display='block'>
+                      • {err}
+                    </Typography>
+                  ))}
+                </Alert>
               )}
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setShowPreviewDialog(false)}>Close</Button>
-        </DialogActions>
-      </Dialog>
+            </CardContent>
+          </Card>
+        </Box>
+      )}
     </Box>
   )
 }

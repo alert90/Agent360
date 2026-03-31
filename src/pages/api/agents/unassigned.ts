@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import { prisma } from 'src/lib/prisma'
+import { prisma } from '../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -7,15 +7,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const {
-      search = '',
-      page = 1,
-      limit = 25,
-      sortBy = 'name',
-      sortOrder = 'asc',
-      super_agent_id = '',
-      franchise_id = ''
-    } = req.query
+    const { search = '', page = 1, limit = 25, sortBy = 'name', sortOrder = 'asc' } = req.query
 
     const offset = (Number(page) - 1) * Number(limit)
 
@@ -68,7 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       name: agent.name,
       account_number: agent.accountNumber,
       type: agent.type,
-      is_active: agent.isActive,
+      is_active: agent.isActive === 1,
       parent_agent_id: agent.parentAgentId,
       created_at: agent.createdAt?.toISOString(),
       email: agent.email,

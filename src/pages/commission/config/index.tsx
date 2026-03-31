@@ -39,16 +39,16 @@ interface CommissionConfig {
   description: string
   status: string
   type: string
-  commission_rate: number
-  super_agent_commission_rate: number
-  franchise_multiplier: number
-  kpi_weights: {
+  commissionRate: number
+  superAgentCommissionRate: number
+  franchiseMultiplier: number
+  kpiWeights: {
     activeness: number
     valueTransacted: number
     uniqueAgents: number
   }
-  created_at: string
-  updated_at: string
+  createdAt: string
+  updatedAt: string
 }
 
 const CommissionConfig = () => {
@@ -66,11 +66,30 @@ const CommissionConfig = () => {
   const fetchConfigs = async () => {
     try {
       setLoading(true)
-      const response = await fetch('/api/commission-configs/list')
+      const response = await fetch('/api/commissions/config')
       if (!response.ok) throw new Error('Failed to fetch configurations')
 
-      const result = await response.json()
-      setConfigs(result.data || [])
+      const configsData = await response.json()
+
+      // Transform data to match frontend interface
+      const transformedConfigs = configsData.map((config: any) => ({
+        id: config.id,
+        title: config.title,
+        code: config.code,
+        description: config.description,
+        status: config.status,
+        type: config.type,
+        commissionRate: config.commissionRate,
+        superAgentCommissionRate: config.superAgentCommissionRate,
+        franchiseMultiplier: config.franchiseMultiplier,
+        kpiWeights: config.kpiWeights
+          ? JSON.parse(config.kpiWeights)
+          : { activeness: 55, valueTransacted: 20, uniqueAgents: 25 },
+        createdAt: config.createdAt,
+        updatedAt: config.updatedAt
+      }))
+
+      setConfigs(transformedConfigs)
     } catch (error) {
       console.error('Error fetching configs:', error)
       toast.error('Failed to load commission configurations')
@@ -112,7 +131,7 @@ const CommissionConfig = () => {
     if (!deleteDialog.config) return
 
     try {
-      const response = await fetch(`/api/commission-configs/${deleteDialog.config.id}`, {
+      const response = await fetch(`/api/commissions/config/${deleteDialog.config.id}`, {
         method: 'DELETE'
       })
 
@@ -215,18 +234,18 @@ const CommissionConfig = () => {
 
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                     <Typography variant='body2'>
-                      <strong>Local Agent Rate:</strong> {(config.commission_rate * 100).toFixed(1)}%
+                      <strong>Local Agent Rate:</strong> {(config.commissionRate * 100).toFixed(1)}%
                     </Typography>
                     <Typography variant='body2'>
-                      <strong>Super Agent Rate:</strong> {(config.super_agent_commission_rate * 100).toFixed(1)}%
+                      <strong>Super Agent Rate:</strong> {(config.superAgentCommissionRate * 100).toFixed(1)}%
                     </Typography>
                     <Typography variant='body2'>
-                      <strong>Franchise Multiplier:</strong> {config.franchise_multiplier}x
+                      <strong>Franchise Multiplier:</strong> {config.franchiseMultiplier}x
                     </Typography>
                   </Box>
 
                   <Typography variant='caption' color='text.secondary' sx={{ mt: 2, display: 'block' }}>
-                    Created: {new Date(config.created_at).toLocaleDateString()}
+                    Created: {new Date(config.createdAt).toLocaleDateString()}
                   </Typography>
                 </CardContent>
               </Card>

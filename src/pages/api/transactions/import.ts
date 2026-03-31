@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import { prisma } from 'src/lib/prisma'
+import { prisma } from '../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -29,10 +29,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       existingAgents: 0
     }
 
-    // Process each transaction individually - NO TRANSACTION WRAPPER
     for (const txn of transactions) {
       try {
-        // Check for duplicate transaction (individual query)
         const existingTx = await prisma.transaction.findUnique({
           where: { transactionId: txn.id }
         })
@@ -46,13 +44,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           continue
         }
 
-        // Find or create agent (individual queries)
         let agent = await prisma.agent.findUnique({
           where: { accountNumber: txn.agentId }
         })
 
         if (!agent) {
-          // Create new agent
           agent = await prisma.agent.create({
             data: {
               accountNumber: txn.agentId,
@@ -75,7 +71,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           stats.existingAgents++
         }
 
-        // Create transaction
         const transaction = await prisma.transaction.create({
           data: {
             transactionId: txn.id,
@@ -100,7 +95,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         })
 
-        // Update agent totals (individual update)
         await prisma.agent.update({
           where: { id: agent.id },
           data: {

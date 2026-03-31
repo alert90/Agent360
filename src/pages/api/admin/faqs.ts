@@ -1,58 +1,39 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
-
-const db = new Database('agent360.db')
+import { prisma } from '../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     try {
-      // Get all FAQ categories with their questions
-      const categoriesStmt = db.prepare(`
-        SELECT
-          c.id, c.slug, c.title, c.icon, c.subtitle, c.order_index, c.is_active,
-          q.id as question_id, q.slug as question_slug, q.question, q.answer, q.order_index as question_order, q.is_active as question_active
-        FROM faq_categories c
-        LEFT JOIN faq_questions q ON c.id = q.category_id
-        ORDER BY c.order_index, q.order_index
-      `)
-
-      const rows = categoriesStmt.all() as any[]
-
-      // Process the data into the expected structure
-      const categoriesMap = new Map()
-
-      for (const row of rows) {
-        if (!categoriesMap.has(row.id)) {
-          categoriesMap.set(row.id, {
-            id: row.id,
-            slug: row.slug,
-            title: row.title,
-            icon: row.icon,
-            subtitle: row.subtitle,
-            orderIndex: row.order_index,
-            isActive: row.is_active,
-            questions: []
-          })
+      const categories = await prisma.faqCategory.findMany({
+        where: { isActive: 1 },
+        orderBy: { orderIndex: 'asc' },
+        include: {
+          questions: {
+            where: { isActive: 1 },
+            orderBy: { orderIndex: 'asc' }
+          }
         }
+      })
 
-        const category = categoriesMap.get(row.id)
+      const formattedCategories = categories.map(c => ({
+        id: c.id,
+        slug: c.slug,
+        title: c.title,
+        icon: c.icon,
+        subtitle: c.subtitle,
+        orderIndex: c.orderIndex,
+        isActive: c.isActive === 1,
+        questions: c.questions.map(q => ({
+          id: q.id,
+          slug: q.slug,
+          question: q.question,
+          answer: q.answer,
+          orderIndex: q.orderIndex,
+          isActive: q.isActive === 1
+        }))
+      }))
 
-        // Add question if it exists
-        if (row.question_id) {
-          category.questions.push({
-            id: row.question_id,
-            slug: row.question_slug,
-            question: row.question,
-            answer: row.answer,
-            orderIndex: row.question_order,
-            isActive: row.question_active
-          })
-        }
-      }
-
-      const categories = Array.from(categoriesMap.values())
-
-      res.status(200).json({ categories })
+      res.status(200).json({ categories: formattedCategories })
     } catch (error) {
       console.error('Error fetching FAQ data:', error)
       res.status(500).json({ message: 'Internal server error' })
@@ -62,42 +43,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { type, data } = req.body
 
       if (type === 'category') {
-        // Create new category
         const { slug, title, icon, subtitle, orderIndex } = data
 
         if (!slug || !title) {
           return res.status(400).json({ message: 'Slug and title are required' })
         }
 
-        const insertStmt = db.prepare(`
-          INSERT INTO faq_categories (slug, title, icon, subtitle, order_index, is_active)
-          VALUES (?, ?, ?, ?, ?, 1)
-        `)
-
-        const result = insertStmt.run(slug, title, icon || 'tabler:help', subtitle || '', orderIndex || 0)
+        const category = await prisma.faqCategory.create({
+          data: {
+            slug,
+            title,
+            icon: icon || 'tabler:help',
+            subtitle: subtitle || '',
+            orderIndex: orderIndex || 0,
+            isActive: 1
+          }
+        })
 
         res.status(201).json({
           message: 'Category created successfully',
-          id: result.lastInsertRowid
+          id: category.id
         })
       } else if (type === 'question') {
-        // Create new question
         const { categoryId, slug, question, answer, orderIndex } = data
 
         if (!categoryId || !slug || !question || !answer) {
           return res.status(400).json({ message: 'Category ID, slug, question, and answer are required' })
         }
 
-        const insertStmt = db.prepare(`
-          INSERT INTO faq_questions (category_id, slug, question, answer, order_index, is_active)
-          VALUES (?, ?, ?, ?, ?, 1)
-        `)
-
-        const result = insertStmt.run(categoryId, slug, question, answer, orderIndex || 0)
+        const newQuestion = await prisma.faqQuestion.create({
+          data: {
+            categoryId,
+            slug,
+            question,
+            answer,
+            orderIndex: orderIndex || 0,
+            isActive: 1
+          }
+        })
 
         res.status(201).json({
           message: 'Question created successfully',
-          id: result.lastInsertRowid
+          id: newQuestion.id
         })
       } else {
         res.status(400).json({ message: 'Invalid type specified' })
@@ -111,29 +98,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { type, id, data } = req.body
 
       if (type === 'category') {
-        // Update category
         const { slug, title, icon, subtitle, orderIndex, isActive } = data
 
-        const updateStmt = db.prepare(`
-          UPDATE faq_categories
-          SET slug = ?, title = ?, icon = ?, subtitle = ?, order_index = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `)
-
-        updateStmt.run(slug, title, icon, subtitle, orderIndex, isActive ? 1 : 0, id)
+        await prisma.faqCategory.update({
+          where: { id },
+          data: {
+            slug,
+            title,
+            icon,
+            subtitle,
+            orderIndex,
+            isActive: isActive ? 1 : 0,
+            updatedAt: new Date()
+          }
+        })
 
         res.status(200).json({ message: 'Category updated successfully' })
       } else if (type === 'question') {
-        // Update question
         const { categoryId, slug, question, answer, orderIndex, isActive } = data
 
-        const updateStmt = db.prepare(`
-          UPDATE faq_questions
-          SET category_id = ?, slug = ?, question = ?, answer = ?, order_index = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `)
-
-        updateStmt.run(categoryId, slug, question, answer, orderIndex, isActive ? 1 : 0, id)
+        await prisma.faqQuestion.update({
+          where: { id },
+          data: {
+            categoryId,
+            slug,
+            question,
+            answer,
+            orderIndex,
+            isActive: isActive ? 1 : 0,
+            updatedAt: new Date()
+          }
+        })
 
         res.status(200).json({ message: 'Question updated successfully' })
       } else {
@@ -148,19 +143,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { type, id } = req.body
 
       if (type === 'category') {
-        // Delete category (this will cascade delete questions due to foreign key, but let's be explicit)
-        const deleteQuestionsStmt = db.prepare('DELETE FROM faq_questions WHERE category_id = ?')
-        deleteQuestionsStmt.run(id)
-
-        const deleteCategoryStmt = db.prepare('DELETE FROM faq_categories WHERE id = ?')
-        deleteCategoryStmt.run(id)
-
+        await prisma.faqQuestion.deleteMany({
+          where: { categoryId: id }
+        })
+        await prisma.faqCategory.delete({
+          where: { id }
+        })
         res.status(200).json({ message: 'Category and its questions deleted successfully' })
       } else if (type === 'question') {
-        // Delete question
-        const deleteStmt = db.prepare('DELETE FROM faq_questions WHERE id = ?')
-        deleteStmt.run(id)
-
+        await prisma.faqQuestion.delete({
+          where: { id }
+        })
         res.status(200).json({ message: 'Question deleted successfully' })
       } else {
         res.status(400).json({ message: 'Invalid type specified' })

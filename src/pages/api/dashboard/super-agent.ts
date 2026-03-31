@@ -1,8 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import Database from 'better-sqlite3'
 import jwt from 'jsonwebtoken'
-
-const db = new Database('agent360.db')
+import { prisma } from '../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -10,7 +8,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Get user from JWT token
     const authHeader = req.headers.authorization
     const token = authHeader?.replace('Bearer ', '') || req.cookies?.token
 
@@ -19,15 +16,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const decoded = jwt.verify(token, process.env.NEXT_PUBLIC_JWT_SECRET!) as { id: number }
-    const userStmt = db.prepare('SELECT * FROM users WHERE id = ? AND is_active = 1')
-    const user = userStmt.get(decoded.id) as any
+    const user = await prisma.user.findUnique({
+      where: {
+        id: decoded.id,
+        isActive: true
+      }
+    })
 
     if (!user || user.role !== 'super_agent') {
       return res.status(403).json({ message: 'Access denied' })
     }
 
-    // Get super agent data
-    const superAgentData = await getSuperAgentData(user.id)
+    const superAgentData = await getSuperAgentData(decoded.id)
 
     res.status(200).json(superAgentData)
   } catch (error) {
@@ -37,122 +37,145 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 }
 
 async function getSuperAgentData(userId: number) {
-  // Find the super agent's agent record
-  const superAgentStmt = db.prepare(`
-    SELECT a.*, u.full_name, u.email
-    FROM agents a
-    JOIN users u ON a.id = u.id
-    WHERE u.id = ? AND a.type = 'super_agent' AND a.is_active = 1
-  `)
-  const superAgent = superAgentStmt.get(userId) as any
+  const superAgent = await prisma.agent.findFirst({
+    where: {
+      id: userId,
+      type: 'super_agent',
+      isActive: 1
+    },
+    include: {
+      parentAgent: true
+    }
+  })
 
   if (!superAgent) {
     throw new Error('Super agent record not found')
   }
 
-  // Agents served by this super agent (local agents under them)
-  const agentsServedStmt = db.prepare(`
-    SELECT COUNT(*) as totalAgents
-    FROM agents
-    WHERE parent_agent_id = ? AND type = 'local_agent' AND is_active = 1
-  `)
-  const agentsServed = agentsServedStmt.get(superAgent.id) as any
+  const superAgentId = superAgent.id
 
-  // Total transactions completed by agents under this super agent
-  const transactionsCompletedStmt = db.prepare(`
-    SELECT
-      COUNT(*) as totalTransactions,
-      SUM(t.amount) as totalAmount
-    FROM transactions t
-    JOIN agents a ON t.agent_id = a.id
-    WHERE a.parent_agent_id = ? AND t.status = 'completed'
-  `)
-  const transactionsCompleted = transactionsCompletedStmt.get(superAgent.id) as any
+  const agentsServed = await prisma.agent.count({
+    where: {
+      parentAgentId: superAgentId,
+      type: 'local_agent',
+      isActive: 1
+    }
+  })
 
-  // Expected commission for this super agent
-  const expectedCommissionStmt = db.prepare(`
-    SELECT
-      SUM(commission_amount) as expectedCommission,
-      SUM(CASE WHEN commission_eligible = 1 THEN commission_amount ELSE 0 END) as liableCommission
-    FROM agents
-    WHERE parent_agent_id = ? AND is_active = 1
-  `)
-  const commissionData = expectedCommissionStmt.get(superAgent.id) as any
+  const transactionsCompleted = await prisma.transaction.aggregate({
+    where: {
+      agent: {
+        parentAgentId: superAgentId
+      },
+      status: 'completed'
+    },
+    _count: {
+      id: true
+    },
+    _sum: {
+      amount: true
+    }
+  })
 
-  // Recent transactions by agents under this super agent
-  const recentTransactionsStmt = db.prepare(`
-    SELECT
-      t.id,
-      t.transaction_id,
-      t.agent_name,
-      t.customer_name,
-      t.type,
-      t.amount,
-      t.status,
-      t.timestamp,
-      a.name as agent_name_full,
-      a.branch_name
-    FROM transactions t
-    JOIN agents a ON t.agent_id = a.id
-    WHERE a.parent_agent_id = ?
-    ORDER BY t.timestamp DESC
-    LIMIT 10
-  `)
-  const recentTransactions = recentTransactionsStmt.all(superAgent.id) as any[]
+  const commissionData = await prisma.agent.aggregate({
+    where: {
+      parentAgentId: superAgentId,
+      isActive: 1
+    },
+    _sum: {
+      commissionAmount: true
+    }
+  })
 
-  // Monthly performance data
-  const monthlyPerformanceStmt = db.prepare(`
+  const recentTransactions = await prisma.transaction.findMany({
+    where: {
+      agent: {
+        parentAgentId: superAgentId
+      }
+    },
+    include: {
+      agent: {
+        select: {
+          name: true,
+          branchName: true
+        }
+      }
+    },
+    orderBy: {
+      timestamp: 'desc'
+    },
+    take: 10
+  })
+
+  const monthlyPerformance = await prisma.$queryRaw`
     SELECT
-      strftime('%Y-%m', t.timestamp) as month,
-      COUNT(*) as transactionCount,
-      SUM(t.amount) as totalAmount,
-      SUM(CASE WHEN t.commission_eligible = 1 THEN t.commission_amount ELSE 0 END) as commissionEarned
-    FROM transactions t
-    JOIN agents a ON t.agent_id = a.id
-    WHERE a.parent_agent_id = ? AND t.status = 'completed'
-    GROUP BY strftime('%Y-%m', t.timestamp)
-    ORDER BY month DESC
+      TO_CHAR(DATE_TRUNC('month', t."timestamp"), 'YYYY-MM') as month,
+      COUNT(*)::integer as "transactionCount",
+      COALESCE(SUM(t."amount"), 0)::numeric as "totalAmount",
+      COALESCE(SUM(CASE WHEN t."commissionEligible" = true THEN t."commissionAmount" ELSE 0 END), 0)::numeric as "commissionEarned"
+    FROM "transactions" t
+    JOIN "agents" a ON t."agentId" = a.id
+    WHERE a."parentAgentId" = ${superAgentId} AND t.status = 'completed'
+    GROUP BY DATE_TRUNC('month', t."timestamp")
+    ORDER BY DATE_TRUNC('month', t."timestamp") DESC
     LIMIT 6
-  `)
-  const monthlyPerformance = monthlyPerformanceStmt.all(superAgent.id) as any[]
+  `
 
-  // Agent performance under this super agent
-  const agentPerformanceStmt = db.prepare(`
-    SELECT
-      a.id,
-      a.name,
-      a.account_number,
-      a.branch_name,
-      COUNT(t.id) as transactionCount,
-      SUM(t.amount) as totalAmount,
-      SUM(CASE WHEN t.commission_eligible = 1 THEN t.commission_amount ELSE 0 END) as commissionEarned
-    FROM agents a
-    LEFT JOIN transactions t ON a.id = t.agent_id AND t.status = 'completed'
-    WHERE a.parent_agent_id = ? AND a.type = 'local_agent' AND a.is_active = 1
-    GROUP BY a.id, a.name, a.account_number, a.branch_name
-    ORDER BY totalAmount DESC
-    LIMIT 10
-  `)
-  const agentPerformance = agentPerformanceStmt.all(superAgent.id) as any[]
+  const agentPerformance = await prisma.agent.findMany({
+    where: {
+      parentAgentId: superAgentId,
+      type: 'local_agent',
+      isActive: 1
+    },
+    orderBy: {
+      totalTransactionAmount: 'desc'
+    },
+    take: 10,
+    include: {
+      transactions: {
+        where: {
+          status: 'completed'
+        },
+        take: 100 // Limit to avoid huge data
+      }
+    }
+  })
+
+  const processedAgentPerformance = agentPerformance.map(agent => {
+    const totalAmount = agent.transactions.reduce((sum, tx) => sum + Number(tx.amount || 0), 0)
+    const commissionEarned = agent.transactions.reduce((sum, tx) => {
+      return sum + (tx.commissionEligible ? Number(tx.commissionAmount || 0) : 0)
+    }, 0)
+
+    return {
+      id: agent.id,
+      name: agent.name,
+      accountNumber: agent.accountNumber,
+      branchName: agent.branchName,
+      transactionCount: agent.transactions.length,
+      totalAmount,
+      commissionEarned
+    }
+  })
 
   return {
     superAgent: {
       id: superAgent.id,
       name: superAgent.name,
       accountNumber: superAgent.accountNumber,
-      branchName: superAgent.branch_name,
-      totalCommission: superAgent.commission_amount,
+      branchName: superAgent.branchName,
+      totalCommission: superAgent.commissionAmount,
       payband: superAgent.payband
     },
     summary: {
-      agentsServed: agentsServed?.totalAgents || 0,
-      totalTransactions: transactionsCompleted?.totalTransactions || 0,
-      totalAmount: transactionsCompleted?.totalAmount || 0,
-      expectedCommission: commissionData?.expectedCommission || 0,
-      liableCommission: commissionData?.liableCommission || 0
+      agentsServed,
+      totalTransactions: transactionsCompleted._count.id || 0,
+      totalAmount: Number(transactionsCompleted._sum?.amount || 0),
+      expectedCommission: Number(commissionData._sum?.commissionAmount || 0),
+      liableCommission: Number(commissionData._sum?.commissionAmount || 0)
     },
     recentTransactions,
     monthlyPerformance,
-    agentPerformance
+    agentPerformance: processedAgentPerformance
   }
 }

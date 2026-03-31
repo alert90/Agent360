@@ -1,4 +1,3 @@
-// ** React Imports
 import { useState } from 'react'
 
 // ** MUI Imports
@@ -111,25 +110,24 @@ const CreateCommission = ({ editData, onSuccess, onCancel }: CreateCommissionPro
   const [activeStep, setActiveStep] = useState<number>(0)
   const [formData, setFormData] = useState(() => {
     if (editData) {
-      // Convert edit data to form format
       return {
         type: editData.type || 'percentage',
-        commissionRate: editData.commission_rate || 0.05,
-        minTransactionAmount: editData.min_transaction_amount || 100000,
-        superAgentCommissionRate: editData.super_agent_commission_rate || 0.2,
-        superAgentFixedRate: editData.super_agent_fixed_rate || 0.06,
-        superAgentVariableRate: editData.super_agent_variable_rate || 0.14,
-        franchiseMultiplier: editData.franchise_multiplier || 4.5,
-        kpiWeights: editData.kpi_weights || {
+        commissionRate: editData.commissionRate || 0.05,
+        minTransactionAmount: editData.minTransactionAmount || 100000,
+        superAgentCommissionRate: editData.superAgentCommissionRate || 0.2,
+        superAgentFixedRate: editData.superAgentFixedRate || 0.3,
+        superAgentVariableRate: editData.superAgentVariableRate || 0.7,
+        franchiseMultiplier: editData.franchiseMultiplier || 4.5,
+        kpiWeights: editData.kpiWeights || {
           activeness: 55,
-          valueTransacted: 25,
-          uniqueAgents: 20
+          valueTransacted: 20,
+          uniqueAgents: 25
         },
         title: editData.title || '',
         code: editData.code || '',
         description: editData.description || '',
         status: editData.status || 'active',
-        assignedUsers: editData.assigned_user_ids || []
+        assignedUsers: editData.assignedUserIds || []
       }
     }
 
@@ -138,13 +136,13 @@ const CreateCommission = ({ editData, onSuccess, onCancel }: CreateCommissionPro
       commissionRate: 0.05,
       minTransactionAmount: 100000,
       superAgentCommissionRate: 0.2,
-      superAgentFixedRate: 0.06,
-      superAgentVariableRate: 0.14,
+      superAgentFixedRate: 0.3,
+      superAgentVariableRate: 0.7,
       franchiseMultiplier: 4.5,
       kpiWeights: {
         activeness: 55,
-        valueTransacted: 25,
-        uniqueAgents: 20
+        valueTransacted: 20,
+        uniqueAgents: 25
       },
       title: '',
       code: '',
@@ -157,10 +155,10 @@ const CreateCommission = ({ editData, onSuccess, onCancel }: CreateCommissionPro
   // ** Hook
   const theme = useTheme()
 
-  // Handle Stepper
   const handleNext = () => {
     setActiveStep(activeStep + 1)
   }
+
   const handlePrev = () => {
     if (activeStep !== 0) {
       setActiveStep(activeStep - 1)
@@ -208,7 +206,7 @@ const CreateCommission = ({ editData, onSuccess, onCancel }: CreateCommissionPro
         <Button
           variant='contained'
           color={stepCondition ? 'success' : 'primary'}
-          onClick={() => (stepCondition ? (onSuccess ? onSuccess() : alert('Submitted..!!')) : handleNext())}
+          onClick={() => (stepCondition ? handleSubmit() : handleNext())}
           endIcon={
             <Icon
               icon={
@@ -221,6 +219,63 @@ const CreateCommission = ({ editData, onSuccess, onCancel }: CreateCommissionPro
         </Button>
       </Box>
     )
+  }
+
+  const handleSubmit = async () => {
+    // Validate KPI weights
+    const totalWeight =
+      (formData.kpiWeights?.activeness || 0) +
+      (formData.kpiWeights?.valueTransacted || 0) +
+      (formData.kpiWeights?.uniqueAgents || 0)
+
+    if (totalWeight !== 100) {
+      alert('KPI weights must total 100%')
+
+      return
+    }
+
+    // Prepare config data
+    const configData = {
+      title: formData.title,
+      code: formData.code,
+      description: formData.description,
+      type: formData.type,
+      value: formData.commissionRate,
+      agentType: 'all',
+      status: formData.status,
+      minTransactionAmount: formData.minTransactionAmount,
+      commissionRate: formData.commissionRate,
+      superAgentCommissionRate: formData.superAgentCommissionRate,
+      superAgentFixedRate: formData.superAgentFixedRate,
+      superAgentVariableRate: formData.superAgentVariableRate,
+      franchiseMultiplier: formData.franchiseMultiplier,
+      kpiWeights: formData.kpiWeights
+    }
+
+    try {
+      const method = editData?.id ? 'PUT' : 'POST'
+      const url = editData?.id ? `/api/commissions/config/${editData.id}` : '/api/commissions/config'
+
+      const response = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(configData)
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.message || 'Failed to save commission configuration')
+      }
+
+      if (onSuccess) {
+        onSuccess()
+      }
+    } catch (error) {
+      console.error('Save error:', error)
+      alert(error instanceof Error ? error.message : 'Failed to save commission configuration')
+    }
   }
 
   return (
@@ -268,7 +323,7 @@ const CreateCommission = ({ editData, onSuccess, onCancel }: CreateCommissionPro
           </Stepper>
         </StepperWrapper>
       </StepperHeaderContainer>
-      <CardContent sx={{ pt: theme => `${theme.spacing(6)} !important` }}>
+      <CardContent sx={{ pt: theme => `${theme.spacing(6)} !important`, flex: 1 }}>
         {renderContent()}
         {renderFooter()}
       </CardContent>

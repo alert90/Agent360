@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import { prisma } from 'src/lib/prisma'
+import { prisma } from '../../../lib/db'
 import jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
 import formidable from 'formidable'
@@ -58,7 +58,7 @@ async function handleProfilePictureUpload(req: NextApiRequest, res: NextApiRespo
       uploadDir,
       keepExtensions: true,
       maxFileSize: 2 * 1024 * 1024, // 2MB limit
-      filename: (name, ext, part) => {
+      filename: (name, ext) => {
         // Generate unique filename
         return `avatar-${userId}-${Date.now()}${ext}`
       }

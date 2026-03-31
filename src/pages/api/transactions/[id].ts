@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
-import { prisma } from 'src/lib/prisma'
+import { prisma } from '../../../lib/db'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query
@@ -10,7 +10,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     if (req.method === 'GET') {
-      // Try to find by transactionId
       const transaction = await prisma.transaction.findUnique({
         where: { transactionId: id },
         include: {
@@ -26,7 +25,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(404).json({ message: 'Transaction not found' })
       }
 
-      // Format customer account to handle scientific notation
       const formatAccountNumber = (account: string | null) => {
         if (!account) return 'N/A'
         if (account.includes('E+')) {
@@ -43,7 +41,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return account
       }
 
-      // Find related transactions (same day, same agent, similar amount)
       const relatedTransactions = await prisma.transaction.findMany({
         where: {
           agentId: transaction.agentId,
@@ -57,7 +54,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         orderBy: { timestamp: 'desc' }
       })
 
-      // Determine commission breakdown based on agent type
       let commissionBreakdown = {
         type: 'local_agent',
         description: 'Direct commission on transaction',

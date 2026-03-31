@@ -5,7 +5,7 @@ export interface UserProfileData {
   email: string
   full_name: string
   username: string
-  role: 'admin' | 'analyst' | 'agent' | 'super_agent' | 'franchise'
+  role: 'admin' | 'analyst' | 'rms' | 'super_agent' | 'franchise' | 'agent'
   permissions?: string
   location?: string
   zone?: string
