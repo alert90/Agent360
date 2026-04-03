@@ -24,6 +24,7 @@ model User {
   zipCode     String?   @map("zip_code")
   avatar      String?
   accountNumber String? @unique @map("account_number")
+  linkedAgents Json? @default("[]") @map("linked_agents")
   createdAt   DateTime? @default(now()) @map("created_at")
   updatedAt   DateTime? @default(now()) @map("updated_at")
 
@@ -34,6 +35,8 @@ model User {
   userLoginSessions          UserLoginSession[]
   userNotifications          UserNotification[]
   regionalManagerAssignments RegionalManagerAssignment[]
+  agentLinks                 UserAgentLink[]
+  BankAccounts               BankAccount[]
 
   @@map("users")
 }
@@ -65,6 +68,7 @@ model Agent {
   // Relations
   parentAgent                 Agent?                      @relation("AgentHierarchy", fields: [parentAgentId], references: [id])
   childAgents                 Agent[]                     @relation("AgentHierarchy")
+  userLinks                   UserAgentLink[]
 
   capitalAdvancedAsFranchise  CapitalAdvanced[]            @relation("franchiseToAgent")
   capitalAdvancedAsAgent      CapitalAdvanced[]            @relation("agentFromFranchise")
@@ -79,6 +83,21 @@ model Agent {
   regionalManagerAssignments  RegionalManagerAssignment[]
 
   @@map("agents")
+}
+
+model UserAgentLink {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  agentId   Int      @map("agent_id")
+  isDefault Boolean  @default(false) @map("is_default")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user  User  @relation(fields: [userId], references: [id])
+  agent Agent @relation(fields: [agentId], references: [id])
+
+  @@unique([userId, agentId])
+  @@map("user_agent_links")
 }
 
 model Transaction {
@@ -500,6 +519,23 @@ model CommissionStructure {
   updatedAt   DateTime @updatedAt
 
   @@map("commission_structures")
+}
+
+model BankAccount {
+  id            Int      @id @default(autoincrement())
+  userId        Int      @map("user_id")
+  bankName      String   @map("bank_name")
+  accountNumber String   @map("account_number")
+  accountName   String   @map("account_name")
+  bankCode      String?  @map("bank_code")
+  branchName    String   @map("branch_name")
+  isDefault     Boolean  @default(false) @map("is_default")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("bank_accounts")
 }
 
 model CapitalAdvanced {

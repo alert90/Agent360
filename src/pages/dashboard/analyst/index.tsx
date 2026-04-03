@@ -1,3 +1,4 @@
+// pages/dashboard/analyst/index.tsx
 import { useState, useEffect } from 'react'
 import { Grid, Card, CardContent, Typography, Box, CircularProgress } from '@mui/material'
 import { DataGrid } from '@mui/x-data-grid'
@@ -7,6 +8,8 @@ import CardStatsVertical from 'src/@core/components/card-statistics/card-stats-v
 
 interface DashboardStats {
   totalAgents: number
+  totalFranchise: number
+  totalSuperAgents: number
   totalTransactions: number
   totalAmount: number
   totalCommission: number
@@ -16,6 +19,8 @@ const AnalystDashboard = () => {
   const router = useRouter()
   const [stats, setStats] = useState<DashboardStats>({
     totalAgents: 0,
+    totalFranchise: 0,
+    totalSuperAgents: 0,
     totalTransactions: 0,
     totalAmount: 0,
     totalCommission: 0
@@ -29,26 +34,43 @@ const AnalystDashboard = () => {
       const token = localStorage.getItem('accessToken')
       const headers = token ? { Authorization: `Bearer ${token}` } : {}
 
-      const statsResponse = await axios.get('/api/transactions/list', {
+      // Fetch agent stats from agents list API
+      const agentsResponse = await axios.get('/api/agents/list', {
         headers,
         params: { page: 1, limit: 1 }
       })
 
-      if (statsResponse.data.success) {
-        setStats({
-          totalAgents: statsResponse.data.stats?.totalAgents || 0,
-          totalTransactions: statsResponse.data.stats?.totalTransactions || 0,
-          totalAmount: statsResponse.data.stats?.totalAmount || 0,
-          totalCommission: statsResponse.data.stats?.totalCommission || 0
-        })
+      if (agentsResponse.data.success) {
+        setStats(prev => ({
+          ...prev,
+          totalAgents: agentsResponse.data.stats?.totalAgents || 0,
+          totalFranchise: agentsResponse.data.stats?.totalFranchise || 0,
+          totalSuperAgents: agentsResponse.data.stats?.totalSuperAgents || 0
+        }))
       }
 
-      const agentsResponse = await axios.get('/api/agents/list', {
+      // Fetch transaction stats
+      const transactionsResponse = await axios.get('/api/transactions/list', {
+        headers,
+        params: { page: 1, limit: 1 }
+      })
+
+      if (transactionsResponse.data.success) {
+        setStats(prev => ({
+          ...prev,
+          totalTransactions: transactionsResponse.data.stats?.totalTransactions || 0,
+          totalAmount: transactionsResponse.data.stats?.totalAmount || 0,
+          totalCommission: transactionsResponse.data.stats?.totalCommission || 0
+        }))
+      }
+
+      // Fetch top performing agents
+      const topAgentsResponse = await axios.get('/api/agents/list', {
         params: { page: 1, limit: 50, sortBy: 'transaction_count', sortOrder: 'desc' }
       })
 
-      if (agentsResponse.data.success) {
-        setTopAgents(agentsResponse.data.data.slice(0, 10))
+      if (topAgentsResponse.data.success) {
+        setTopAgents(topAgentsResponse.data.data.slice(0, 10))
       }
     } catch (error) {
       console.error('Failed to fetch analyst dashboard data:', error)
@@ -87,16 +109,39 @@ const AnalystDashboard = () => {
         </Typography>
       </Grid>
 
+      {/* Agent Stats - From AGENTS table */}
       <Grid item xs={12} sm={6} md={3}>
         <CardStatsVertical
           stats={stats.totalAgents.toLocaleString()}
           title='Total Agents'
-          subtitle='Active Network'
+          subtitle='All Agent Accounts'
           avatarIcon='tabler:users'
           avatarColor='primary'
           chipText='+12%'
         />
       </Grid>
+      <Grid item xs={12} sm={6} md={3}>
+        <CardStatsVertical
+          stats={stats.totalSuperAgents.toLocaleString()}
+          title='Super Agents'
+          subtitle='Super Agent Accounts'
+          avatarIcon='tabler:star'
+          avatarColor='warning'
+          chipText='+8%'
+        />
+      </Grid>
+      <Grid item xs={12} sm={6} md={3}>
+        <CardStatsVertical
+          stats={stats.totalFranchise.toLocaleString()}
+          title='Franchises'
+          subtitle='Franchise Accounts'
+          avatarIcon='tabler:building-store'
+          avatarColor='secondary'
+          chipText='+5%'
+        />
+      </Grid>
+
+      {/* Transaction Stats */}
       <Grid item xs={12} sm={6} md={3}>
         <CardStatsVertical
           stats={stats.totalTransactions.toLocaleString()}
@@ -128,6 +173,7 @@ const AnalystDashboard = () => {
         />
       </Grid>
 
+      {/* Top Performing Agents Table */}
       <Grid item xs={12}>
         <Card>
           <CardContent>

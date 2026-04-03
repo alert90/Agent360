@@ -4,16 +4,12 @@ import { prisma } from '../../../lib/db'
 import bcrypt from 'bcryptjs'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  console.log('🔐 Login API called')
-
   if (req.method !== 'POST') {
     return res.status(405).json({ message: 'Method not allowed' })
   }
 
   try {
     const { email, password } = req.body
-    console.log('📧 Login attempt for:', email)
-
     if (!email || !password) {
       return res.status(400).json({ error: { email: ['Email and password are required'] } })
     }
@@ -24,18 +20,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     })
 
     if (!user) {
-      console.log('❌ User not found:', email)
-
       return res.status(401).json({ error: { email: ['Email or Password is Invalid'] } })
     }
-
-    console.log('✅ User found, verifying password...')
 
     // Verify password
     let isPasswordValid = false
     try {
       isPasswordValid = await bcrypt.compare(password, user.password)
-      console.log('🔐 Password valid:', isPasswordValid)
     } catch (bcryptError) {
       console.error('❌ Bcrypt error:', bcryptError)
     }

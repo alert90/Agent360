@@ -20,16 +20,14 @@ import CircularProgress from '@mui/material/CircularProgress'
 import Icon from 'src/@core/components/icon'
 
 // ** Third Party Imports
-import axios from 'axios'
 
 // ** Types
 import { PricingPlanType } from 'src/@core/components/plan-details/types'
 
 // ** Demo Tabs Imports
 import TabAccount from 'src/views/pages/account-settings/TabAccount'
-import TabBilling from 'src/views/pages/account-settings/TabBilling'
+import TabBankConnections from 'src/views/pages/account-settings/TabBankConnections'
 import TabSecurity from 'src/views/pages/account-settings/TabSecurity'
-import TabConnections from 'src/views/pages/account-settings/TabConnections'
 import TabNotifications from 'src/views/pages/account-settings/TabNotifications'
 
 const TabList = styled(MuiTabList)<TabListProps>(({ theme }) => ({
@@ -61,7 +59,7 @@ const TabList = styled(MuiTabList)<TabListProps>(({ theme }) => ({
   }
 }))
 
-const AccountSettings = ({ tab, apiPricingPlanData }: { tab: string; apiPricingPlanData: PricingPlanType[] }) => {
+const AccountSettings = ({ tab }: { tab: string; apiPricingPlanData: PricingPlanType[] }) => {
   // ** State
   const [activeTab, setActiveTab] = useState<string>(tab)
   const [isLoading, setIsLoading] = useState<boolean>(false)
@@ -85,9 +83,8 @@ const AccountSettings = ({ tab, apiPricingPlanData }: { tab: string; apiPricingP
   const tabContentList: { [key: string]: ReactElement } = {
     account: <TabAccount />,
     security: <TabSecurity />,
-    connections: <TabConnections />,
-    notifications: <TabNotifications />,
-    billing: <TabBilling />
+    connections: <TabBankConnections />, // Renamed from TabBilling to TabBankConnections
+    notifications: <TabNotifications />
   }
 
   return (
@@ -121,11 +118,11 @@ const AccountSettings = ({ tab, apiPricingPlanData }: { tab: string; apiPricingP
                   }
                 />
                 <Tab
-                  value='billing'
+                  value='connections'
                   label={
                     <Box sx={{ display: 'flex', alignItems: 'center', ...(!hideText && { '& svg': { mr: 2 } }) }}>
-                      <Icon fontSize='1.25rem' icon='tabler:file-text' />
-                      {!hideText && 'Billing'}
+                      <Icon fontSize='1.25rem' icon='tabler:link' />
+                      {!hideText && 'Connections'}
                     </Box>
                   }
                 />
@@ -135,15 +132,6 @@ const AccountSettings = ({ tab, apiPricingPlanData }: { tab: string; apiPricingP
                     <Box sx={{ display: 'flex', alignItems: 'center', ...(!hideText && { '& svg': { mr: 2 } }) }}>
                       <Icon fontSize='1.25rem' icon='tabler:bell' />
                       {!hideText && 'Notifications'}
-                    </Box>
-                  }
-                />
-                <Tab
-                  value='connections'
-                  label={
-                    <Box sx={{ display: 'flex', alignItems: 'center', ...(!hideText && { '& svg': { mr: 2 } }) }}>
-                      <Icon fontSize='1.25rem' icon='tabler:link' />
-                      {!hideText && 'Connections'}
                     </Box>
                   }
                 />

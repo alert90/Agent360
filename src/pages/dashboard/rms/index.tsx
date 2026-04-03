@@ -1,24 +1,10 @@
 import React, { useState, useEffect } from 'react'
-import {
-  Grid,
-  Card,
-  CardContent,
-  Typography,
-  Box,
-  Button,
-  CircularProgress,
-  Chip,
-  Tab,
-  IconButton
-} from '@mui/material'
+import { Grid, Card, CardContent, Typography, Box, Button, CircularProgress, Chip, IconButton } from '@mui/material'
 import { styled } from '@mui/material/styles'
 import { DataGrid } from '@mui/x-data-grid'
 import { useRouter } from 'next/router'
 import Icon from 'src/@core/components/icon'
 import axios from 'axios'
-import TabContext from '@mui/lab/TabContext'
-import TabPanel from '@mui/lab/TabPanel'
-import MuiTabList, { TabListProps } from '@mui/lab/TabList'
 
 // ** Styled Components
 const StyledChip = styled(Chip)(({ theme }) => ({
@@ -29,30 +15,6 @@ const StyledChip = styled(Chip)(({ theme }) => ({
   '&.inactive': {
     backgroundColor: theme.palette.error.main,
     color: theme.palette.common.white
-  }
-}))
-
-const TabList = styled(MuiTabList)<TabListProps>(({ theme }) => ({
-  borderBottom: '0 !important',
-  '&, & .MuiTabs-scroller': {
-    boxSizing: 'content-box',
-    padding: theme.spacing(1.25, 1.25, 2),
-    margin: `${theme.spacing(-1.25, -1.25, -2)} !important`
-  },
-  '& .MuiTabs-indicator': {
-    display: 'none'
-  },
-  '& .Mui-selected': {
-    boxShadow: theme.shadows[2],
-    backgroundColor: theme.palette.primary.main,
-    color: `${theme.palette.common.white} !important`
-  },
-  '& .MuiTab-root': {
-    lineHeight: 1,
-    borderRadius: theme.shape.borderRadius,
-    '&:hover': {
-      color: theme.palette.primary.main
-    }
   }
 }))
 
@@ -91,7 +53,6 @@ const RmsDashboard = () => {
   })
   const [topAgents, setTopAgents] = useState<TopAgent[]>([])
   const [loading, setLoading] = useState(true)
-  const [currentTab, setCurrentTab] = useState('0')
 
   const fetchDashboardData = async () => {
     try {
@@ -99,10 +60,24 @@ const RmsDashboard = () => {
 
       // Fetch system stats from transactions API
       const token = localStorage.getItem('accessToken')
-      const statsHeaders = token ? { Authorization: `Bearer ${token}` } : {}
+      const headers = token ? { Authorization: `Bearer ${token}` } : {}
+
+      const agentsResponse = await axios.get('/api/agents/list', {
+        headers,
+        params: { page: 1, limit: 1 }
+      })
+
+      if (agentsResponse.data.success) {
+        setSystemStats(prev => ({
+          ...prev,
+          totalAgents: agentsResponse.data.stats?.totalAgents || 0,
+          franchiseAgents: agentsResponse.data.stats?.totalFranchise || 0,
+          superAgents: agentsResponse.data.stats?.totalSuperAgents || 0
+        }))
+      }
 
       const statsResponse = await axios.get('/api/transactions/list', {
-        headers: statsHeaders,
+        headers: headers,
         params: {
           page: 1,
           limit: 1
@@ -111,30 +86,21 @@ const RmsDashboard = () => {
 
       if (statsResponse.data.success) {
         const stats = statsResponse.data.stats
-        setSystemStats({
-          totalAgents: stats.totalAgents || 0,
-          franchiseAgents: stats.franchiseAgents || 0,
-          superAgents: stats.superAgents || 0,
+        setSystemStats(prev => ({
+          ...prev,
           transactions: stats.totalTransactions || 0,
           totalAmount: stats.totalAmount || 0,
           totalCommission: stats.totalCommission || 0,
           avgTransactionAmount: stats.avgTransactionAmount || 0
-        })
+        }))
       }
 
-      // Fetch top performing agents with proper transaction amounts
-      const agentsResponse = await axios.get('/api/agents/list', {
-        params: {
-          page: 1,
-          limit: 50, // Get more agents to ensure we get the top performers
-          sortBy: 'transaction_count',
-          sortOrder: 'desc'
-        }
+      const topAgentsResponse = await axios.get('/api/agents/list', {
+        params: { page: 1, limit: 50, sortBy: 'transaction_count', sortOrder: 'desc' }
       })
 
-      if (agentsResponse.data.success) {
-        // Sort by transaction count and take top 10
-        const sortedAgents = agentsResponse.data.data
+      if (topAgentsResponse.data.success) {
+        const sortedAgents = topAgentsResponse.data.data
           .sort((a: TopAgent, b: TopAgent) => b.transaction_count - a.transaction_count)
           .slice(0, 10)
         setTopAgents(sortedAgents)
@@ -166,10 +132,6 @@ const RmsDashboard = () => {
     return new Intl.NumberFormat('en-US').format(num)
   }
 
-  const handleTabChange = (event: React.SyntheticEvent, newValue: string) => {
-    setCurrentTab(newValue)
-  }
-
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '50vh' }}>
@@ -188,64 +150,36 @@ const RmsDashboard = () => {
           Performance analytics and agents insights
         </Typography>
       </Grid>
-
       {/* Key Metrics with Tabs */}
-      <Grid item xs={12}>
-        <Card>
-          <CardContent>
-            <Typography variant='h6' sx={{ mb: 3 }}>
-              Agent Statistics
+      <Grid container spacing={3}>
+        <Grid item xs={12} sm={4}>
+          <Box sx={{ textAlign: 'center', p: 3, borderRadius: 2 }}>
+            <Icon icon='tabler:users' fontSize='3rem' color='#1976d2' /> {/* Primary Blue */}
+            <Typography variant='h3'>{systemStats.totalAgents.toLocaleString()}</Typography>
+            <Typography variant='body2' color='text.secondary'>
+              Total Agents
             </Typography>
-            <TabContext value={currentTab}>
-              <TabList onChange={handleTabChange} aria-label='agent statistics tabs'>
-                <Tab label='Total Agents' value='0' />
-                <Tab label='Franchise Agents' value='1' />
-                <Tab label='Super Agents' value='2' />
-              </TabList>
-              <TabPanel value='0' sx={{ p: 0 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', py: 4 }}>
-                  <Box sx={{ mr: 2 }}>
-                    <Icon icon='tabler:users' fontSize='2rem' color='primary' />
-                  </Box>
-                  <Box>
-                    <Typography variant='h3'>{formatNumber(systemStats.totalAgents)}</Typography>
-                    <Typography variant='body2' color='text.secondary'>
-                      Total Agents
-                    </Typography>
-                  </Box>
-                </Box>
-              </TabPanel>
-              <TabPanel value='1' sx={{ p: 0 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', py: 4 }}>
-                  <Box sx={{ mr: 2 }}>
-                    <Icon icon='tabler:building-store' fontSize='2rem' color='secondary' />
-                  </Box>
-                  <Box>
-                    <Typography variant='h3'>{formatNumber(systemStats.franchiseAgents)}</Typography>
-                    <Typography variant='body2' color='text.secondary'>
-                      Franchise Agents
-                    </Typography>
-                  </Box>
-                </Box>
-              </TabPanel>
-              <TabPanel value='2' sx={{ p: 0 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', py: 4 }}>
-                  <Box sx={{ mr: 2 }}>
-                    <Icon icon='tabler:star' fontSize='2rem' color='warning' />
-                  </Box>
-                  <Box>
-                    <Typography variant='h3'>{formatNumber(systemStats.superAgents)}</Typography>
-                    <Typography variant='body2' color='text.secondary'>
-                      Super Agents
-                    </Typography>
-                  </Box>
-                </Box>
-              </TabPanel>
-            </TabContext>
-          </CardContent>
-        </Card>
+          </Box>
+        </Grid>
+        <Grid item xs={12} sm={4}>
+          <Box sx={{ textAlign: 'center', p: 3, borderRadius: 2 }}>
+            <Icon icon='tabler:building-store' fontSize='3rem' color='#2e7d32' /> {/* Success Green */}
+            <Typography variant='h3'>{systemStats.franchiseAgents.toLocaleString()}</Typography>
+            <Typography variant='body2' color='text.secondary'>
+              Franchise Agents
+            </Typography>
+          </Box>
+        </Grid>
+        <Grid item xs={12} sm={4}>
+          <Box sx={{ textAlign: 'center', p: 3, borderRadius: 2 }}>
+            <Icon icon='tabler:star' fontSize='3rem' color='#ed6c02' /> {/* Warning Orange */}
+            <Typography variant='h3'>{systemStats.superAgents.toLocaleString()}</Typography>
+            <Typography variant='body2' color='text.secondary'>
+              Super Agents
+            </Typography>
+          </Box>
+        </Grid>
       </Grid>
-
       {/* Other Key Metrics */}
       <Grid item xs={12} md={4}>
         <Card>
@@ -264,7 +198,6 @@ const RmsDashboard = () => {
           </CardContent>
         </Card>
       </Grid>
-
       <Grid item xs={12} md={4}>
         <Card>
           <CardContent>
@@ -282,7 +215,6 @@ const RmsDashboard = () => {
           </CardContent>
         </Card>
       </Grid>
-
       {/* <Grid item xs={12} md={4}>
         <Card>
           <CardContent>
@@ -300,7 +232,6 @@ const RmsDashboard = () => {
           </CardContent>
         </Card>
       </Grid> */}
-
       {/* Top Performing Agents */}
       <Grid item xs={12}>
         <Card>
@@ -432,7 +363,6 @@ const RmsDashboard = () => {
           </CardContent>
         </Card>
       </Grid>
-
       {/* Quick Actions */}
       <Grid item xs={12}>
         <Card>
