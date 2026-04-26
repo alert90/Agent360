@@ -109,22 +109,6 @@ const navigation = (): HorizontalNavItemsType => {
       ]
     },
     {
-      icon: 'tabler:chart-line',
-      title: 'Analytics',
-      children: [
-        {
-          title: 'Business Analytics',
-          icon: 'tabler:chart-pie',
-          path: '/analytics/business'
-        },
-        {
-          title: 'Agent Analytics',
-          icon: 'tabler:user-check',
-          path: '/analytics/agent'
-        }
-      ]
-    },
-    {
       icon: 'tabler:settings',
       title: 'Administration',
       children: [

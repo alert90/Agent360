@@ -19,11 +19,12 @@ import DialogContent from '@mui/material/DialogContent'
 import DialogContentText from '@mui/material/DialogContentText'
 import DialogTitle from '@mui/material/DialogTitle'
 import CircularProgress from '@mui/material/CircularProgress'
+import { Divider } from '@mui/material'
 
 // ** Icon Imports
 import Icon from 'src/@core/components/icon'
 
-// ** Demo Components Imports
+// ** Create Components Imports
 import CreateCommission from 'src/views/pages/create-commission'
 
 // ** Custom Component
@@ -42,11 +43,17 @@ interface CommissionConfig {
   commissionRate: number
   superAgentCommissionRate: number
   franchiseMultiplier: number
+  franchiseBaseRate: number
+  startDate: string
+  endDate: string
   kpiWeights: {
     activeness: number
     valueTransacted: number
     uniqueAgents: number
   }
+  kpiBands?: any[]
+  paybands?: any[]
+  paybandRates?: string
   createdAt: string
   updatedAt: string
 }
@@ -62,6 +69,9 @@ const CommissionConfig = () => {
   })
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null)
   const [menuConfig, setMenuConfig] = useState<CommissionConfig | null>(null)
+
+  // src/views/pages/create-commission/CommissionConfig.tsx (or wherever fetchConfigs is)
+  // Fix the JSON.parse issue
 
   const fetchConfigs = async () => {
     try {
@@ -82,9 +92,31 @@ const CommissionConfig = () => {
         commissionRate: config.commissionRate,
         superAgentCommissionRate: config.superAgentCommissionRate,
         franchiseMultiplier: config.franchiseMultiplier,
-        kpiWeights: config.kpiWeights
-          ? JSON.parse(config.kpiWeights)
-          : { activeness: 55, valueTransacted: 20, uniqueAgents: 25 },
+        franchiseBaseRate: config.franchiseBaseRate,
+        startDate: config.startDate || '',
+        endDate: config.endDate || '',
+
+        // Safe JSON parsing with fallback
+        kpiWeights:
+          config.kpiWeights && config.kpiWeights !== 'null'
+            ? typeof config.kpiWeights === 'string'
+              ? JSON.parse(config.kpiWeights)
+              : config.kpiWeights
+            : { activeness: 55, valueTransacted: 20, uniqueAgents: 25 },
+
+        kpiBands:
+          config.paybandRates && config.type === 'SUPER_AGENT'
+            ? typeof config.paybandRates === 'string'
+              ? JSON.parse(config.paybandRates)
+              : config.paybandRates
+            : null,
+        paybands:
+          config.paybandRates && config.type === 'FRANCHISE'
+            ? typeof config.paybandRates === 'string'
+              ? JSON.parse(config.paybandRates)
+              : config.paybandRates
+            : null,
+
         createdAt: config.createdAt,
         updatedAt: config.updatedAt
       }))
@@ -216,6 +248,7 @@ const CommissionConfig = () => {
                     </IconButton>
                   }
                 />
+                <Divider />
                 <CardContent>
                   <Box sx={{ mb: 2 }}>
                     <Chip

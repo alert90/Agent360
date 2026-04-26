@@ -105,49 +105,98 @@ interface CreateCommissionProps {
   onCancel?: () => void
 }
 
+const formatDateForInput = (dateStr: string | null | undefined): string => {
+  if (!dateStr) return ''
+  try {
+    const date = new Date(dateStr)
+    if (isNaN(date.getTime())) return ''
+
+    return date.toISOString().split('T')[0] // Returns "YYYY-MM-DD"
+  } catch {
+    return ''
+  }
+}
+
 const CreateCommission = ({ editData, onSuccess, onCancel }: CreateCommissionProps) => {
   // ** States
   const [activeStep, setActiveStep] = useState<number>(0)
+  const [reviewConfirmed, setReviewConfirmed] = useState(false)
   const [formData, setFormData] = useState(() => {
     if (editData) {
       return {
-        type: editData.type || 'percentage',
+        type: editData.type || 'SUPER_AGENT',
         commissionRate: editData.commissionRate || 0.05,
         minTransactionAmount: editData.minTransactionAmount || 100000,
         superAgentCommissionRate: editData.superAgentCommissionRate || 0.2,
         superAgentFixedRate: editData.superAgentFixedRate || 0.3,
         superAgentVariableRate: editData.superAgentVariableRate || 0.7,
         franchiseMultiplier: editData.franchiseMultiplier || 4.5,
+        franchiseBaseRate: editData.franchiseBaseRate || 0.0005,
         kpiWeights: editData.kpiWeights || {
           activeness: 55,
           valueTransacted: 20,
           uniqueAgents: 25
         },
+        kpiBands: editData.kpiBands || [
+          { min: 0, max: 50, rate: 0 },
+          { min: 51, max: 60, rate: 20 },
+          { min: 61, max: 70, rate: 40 },
+          { min: 71, max: 80, rate: 60 },
+          { min: 81, max: 90, rate: 80 },
+          { min: 91, max: 100, rate: 100 }
+        ],
+        paybands: editData.paybands || [
+          { min: 100, max: Infinity, name: 'Excellent', apportionRate: 1.0, clawbackPercentage: 0 },
+          { min: 80, max: 99, name: 'Good', apportionRate: 0.8, clawbackPercentage: 20 },
+          { min: 60, max: 79, name: 'Average', apportionRate: 0.6, clawbackPercentage: 40 },
+          { min: 40, max: 59, name: 'Below Average', apportionRate: 0.4, clawbackPercentage: 60 },
+          { min: 0, max: 39, name: 'Poor', apportionRate: 0.2, clawbackPercentage: 80 }
+        ],
         title: editData.title || '',
         code: editData.code || '',
         description: editData.description || '',
         status: editData.status || 'active',
+        startDate: formatDateForInput(editData.startDate),
+        endDate: formatDateForInput(editData.endDate),
         assignedUsers: editData.assignedUserIds || []
       }
     }
 
     return {
-      type: 'percentage',
+      type: 'SUPER_AGENT',
       commissionRate: 0.05,
       minTransactionAmount: 100000,
       superAgentCommissionRate: 0.2,
       superAgentFixedRate: 0.3,
       superAgentVariableRate: 0.7,
       franchiseMultiplier: 4.5,
+      franchiseBaseRate: 0.0005,
       kpiWeights: {
         activeness: 55,
         valueTransacted: 20,
         uniqueAgents: 25
       },
+      kpiBands: [
+        { min: 0, max: 50, rate: 0 },
+        { min: 51, max: 60, rate: 20 },
+        { min: 61, max: 70, rate: 40 },
+        { min: 71, max: 80, rate: 60 },
+        { min: 81, max: 90, rate: 80 },
+        { min: 91, max: 100, rate: 100 }
+      ],
+      paybands: [
+        { min: 100, max: Infinity, name: 'Excellent', apportionRate: 1.0, clawbackPercentage: 0 },
+        { min: 80, max: 99, name: 'Good', apportionRate: 0.8, clawbackPercentage: 20 },
+        { min: 60, max: 79, name: 'Average', apportionRate: 0.6, clawbackPercentage: 40 },
+        { min: 40, max: 59, name: 'Below Average', apportionRate: 0.4, clawbackPercentage: 60 },
+        { min: 0, max: 39, name: 'Poor', apportionRate: 0.2, clawbackPercentage: 80 }
+      ],
       title: '',
       code: '',
       description: '',
       status: 'active',
+      startDate: '',
+      endDate: '',
       assignedUsers: []
     }
   })
@@ -174,7 +223,7 @@ const CreateCommission = ({ editData, onSuccess, onCancel }: CreateCommissionPro
       case 2:
         return <StepCommissionUsage formData={formData} setFormData={setFormData} />
       case 3:
-        return <StepCommissionReview formData={formData} onSuccess={onSuccess} />
+        return <StepCommissionReview formData={formData} onSuccess={onSuccess} onConfirmedChange={setReviewConfirmed} />
       default:
         return null
     }
@@ -206,6 +255,7 @@ const CreateCommission = ({ editData, onSuccess, onCancel }: CreateCommissionPro
         <Button
           variant='contained'
           color={stepCondition ? 'success' : 'primary'}
+          disabled={stepCondition && !reviewConfirmed}
           onClick={() => (stepCondition ? handleSubmit() : handleNext())}
           endIcon={
             <Icon
@@ -222,40 +272,94 @@ const CreateCommission = ({ editData, onSuccess, onCancel }: CreateCommissionPro
   }
 
   const handleSubmit = async () => {
-    // Validate KPI weights
-    const totalWeight =
-      (formData.kpiWeights?.activeness || 0) +
-      (formData.kpiWeights?.valueTransacted || 0) +
-      (formData.kpiWeights?.uniqueAgents || 0)
-
-    if (totalWeight !== 100) {
-      alert('KPI weights must total 100%')
+    if (!reviewConfirmed) {
+      alert('Please confirm the commission details before submitting')
 
       return
     }
 
+    if (formData.type === 'SUPER_AGENT') {
+      const totalWeight =
+        (formData.kpiWeights?.activeness || 0) +
+        (formData.kpiWeights?.valueTransacted || 0) +
+        (formData.kpiWeights?.uniqueAgents || 0)
+
+      if (totalWeight !== 100) {
+        alert('KPI weights must total 100%')
+
+        return
+      }
+    }
+
     // Prepare config data
-    const configData = {
+    const configData: Record<string, any> = {
       title: formData.title,
       code: formData.code,
       description: formData.description,
       type: formData.type,
       value: formData.commissionRate,
-      agentType: 'all',
+      agentType: formData.type,
       status: formData.status,
       minTransactionAmount: formData.minTransactionAmount,
       commissionRate: formData.commissionRate,
-      superAgentCommissionRate: formData.superAgentCommissionRate,
-      superAgentFixedRate: formData.superAgentFixedRate,
-      superAgentVariableRate: formData.superAgentVariableRate,
-      franchiseMultiplier: formData.franchiseMultiplier,
-      kpiWeights: formData.kpiWeights
+
+      ...(formData.startDate && formData.startDate !== ''
+        ? { startDate: new Date(formData.startDate + 'T00:00:00.000Z') }
+        : { startDate: null }),
+      ...(formData.endDate && formData.endDate !== ''
+        ? { endDate: new Date(formData.endDate + 'T23:59:59.999Z') }
+        : { endDate: null }),
+
+      ...(formData.type === 'SUPER_AGENT'
+        ? {
+            superAgentCommissionRate: formData.superAgentCommissionRate,
+            superAgentFixedRate: formData.superAgentFixedRate,
+            superAgentVariableRate: formData.superAgentVariableRate,
+            kpiWeights: JSON.stringify(formData.kpiWeights),
+            kpiBands: formData.kpiBands,
+            franchiseMultiplier: null,
+            franchiseBaseRate: null,
+            paybandRates: JSON.stringify(
+              formData.kpiBands || [
+                { min: 0, max: 50, rate: 0 },
+                { min: 51, max: 60, rate: 20 },
+                { min: 61, max: 70, rate: 40 },
+                { min: 71, max: 80, rate: 60 },
+                { min: 81, max: 90, rate: 80 },
+                { min: 91, max: 100, rate: 100 }
+              ]
+            )
+          }
+        : {
+            franchiseMultiplier: formData.franchiseMultiplier,
+            franchiseBaseRate: formData.franchiseBaseRate,
+            superAgentCommissionRate: null,
+            superAgentFixedRate: null,
+            superAgentVariableRate: null,
+            kpiWeights: null,
+            kpiBands: null,
+            paybandRates: JSON.stringify(
+              formData.paybands || [
+                { min: 100, max: Infinity, name: 'Excellent', apportionRate: 1.0, clawbackPercentage: 0 },
+                { min: 80, max: 99, name: 'Good', apportionRate: 0.8, clawbackPercentage: 20 },
+                { min: 60, max: 79, name: 'Average', apportionRate: 0.6, clawbackPercentage: 40 },
+                { min: 40, max: 59, name: 'Below Average', apportionRate: 0.4, clawbackPercentage: 60 },
+                { min: 0, max: 39, name: 'Poor', apportionRate: 0.2, clawbackPercentage: 80 }
+              ]
+            )
+          }),
+      assignedUsers: formData.assignedUsers || []
     }
+
+    Object.keys(configData).forEach(key => {
+      if (configData[key] === undefined || key === 'kpiBands' || key === 'paybands') {
+        delete configData[key]
+      }
+    })
 
     try {
       const method = editData?.id ? 'PUT' : 'POST'
       const url = editData?.id ? `/api/commissions/config/${editData.id}` : '/api/commissions/config'
-
       const response = await fetch(url, {
         method,
         headers: {

@@ -1,11 +1,11 @@
-// ** React Imports
+// src/views/pages/create-commission/StepCommissionType.tsx
 import { ChangeEvent, useState } from 'react'
 
 // ** MUI Imports
 import Box from '@mui/material/Box'
 import Grid from '@mui/material/Grid'
 import Typography from '@mui/material/Typography'
-import { styled, useTheme } from '@mui/material/styles'
+import { useTheme } from '@mui/material/styles'
 
 // ** Custom Component Import
 import CustomTextField from 'src/@core/components/mui/text-field'
@@ -16,9 +16,6 @@ import { CustomRadioIconsData, CustomRadioIconsProps } from 'src/@core/component
 // ** Custom Components Imports
 import CustomRadioIcons from 'src/@core/components/custom-radio/icons'
 
-// ** Types
-import { AgentType } from 'src/types/apps/commissionTypes'
-
 interface IconType {
   icon: CustomRadioIconsProps['icon']
   iconProps: CustomRadioIconsProps['iconProps']
@@ -27,34 +24,24 @@ interface IconType {
 const data: CustomRadioIconsData[] = [
   {
     isSelected: true,
-    value: 'percentage',
-    content: 'Commission calculated as percentage of transaction amount.',
+    value: 'SUPER_AGENT',
+    content: 'Commission for Super Agents managing local agents with KPI-based performance.',
     title: (
       <Typography variant='h6' sx={{ mb: 1 }}>
-        Percentage Based
+        Super Agent
+      </Typography>
+    )
+  },
+  {
+    value: 'FRANCHISE',
+    content: 'Commission for Franchises based on capital advanced and turnover multiplier.',
+    title: (
+      <Typography variant='h6' sx={{ mb: 1 }}>
+        Franchise
       </Typography>
     )
   }
 ]
-
-const ImgWrapper = styled('div')(({ theme }) => ({
-  display: 'flex',
-  alignItems: 'flex-end',
-  justifyContent: 'center',
-  borderRadius: theme.shape.borderRadius,
-  border: `1px solid ${theme.palette.divider}`,
-  [theme.breakpoints.down('sm')]: {
-    padding: theme.spacing(4, 4, 0, 4)
-  },
-  [theme.breakpoints.up('sm')]: {
-    height: 250,
-    padding: theme.spacing(5, 5, 0, 5)
-  },
-  '& img': {
-    height: 'auto',
-    maxWidth: '100%'
-  }
-}))
 
 const StepCommissionType = ({ formData, setFormData }: { formData: any; setFormData: (data: any) => void }) => {
   const initialIconSelected: string = data.filter(item => item.isSelected)[
@@ -69,29 +56,46 @@ const StepCommissionType = ({ formData, setFormData }: { formData: any; setFormD
 
   const icons: IconType[] = [
     {
-      icon: 'tabler:percentage',
-      iconProps: { fontSize: '2.5rem', style: { marginBottom: 8 }, color: theme.palette.text.secondary }
+      icon: 'tabler:user-star',
+      iconProps: { fontSize: '2.5rem', style: { marginBottom: 8 }, color: theme.palette.primary.main }
     },
     {
-      icon: 'tabler:currency-dollar',
-      iconProps: { fontSize: '2.5rem', style: { marginBottom: 8 }, color: theme.palette.text.secondary }
+      icon: 'tabler:building-store',
+      iconProps: { fontSize: '2.5rem', style: { marginBottom: 8 }, color: theme.palette.warning.main }
     }
   ]
 
   const handleRadioChange = (prop: string | ChangeEvent<HTMLInputElement>) => {
     const value = typeof prop === 'string' ? prop : (prop.target as HTMLInputElement).value
     setSelectedRadio(value)
-    setFormData({ ...formData, type: value })
+
+    // Reset type-specific fields when switching types
+    if (value === 'SUPER_AGENT') {
+      setFormData({
+        ...formData,
+        type: value,
+        franchiseMultiplier: 4.5,
+        franchiseBaseRate: 0.0005
+      })
+    } else {
+      setFormData({
+        ...formData,
+        type: value,
+        superAgentCommissionRate: 0.2,
+        superAgentFixedRate: 0.3,
+        superAgentVariableRate: 0.7,
+        kpiWeights: {
+          activeness: 55,
+          valueTransacted: 20,
+          uniqueAgents: 25
+        }
+      })
+    }
   }
 
   return (
     <>
       <Grid container sx={{ mb: 6 }} spacing={4}>
-        <Grid item xs={12} sx={{ mb: 2 }}>
-          <ImgWrapper>
-            <img width={650} alt='illustration' src={`/images/pages/create-deal-type-${theme.palette.mode}.png`} />
-          </ImgWrapper>
-        </Grid>
         {data.map((item, index) => (
           <CustomRadioIcons
             key={index}
@@ -109,55 +113,84 @@ const StepCommissionType = ({ formData, setFormData }: { formData: any; setFormD
       <Grid container spacing={4}>
         <Grid item xs={12}>
           <Typography variant='h6' sx={{ mb: 3 }}>
-            Commission Configuration Overview
+            {selectedRadio === 'SUPER_AGENT' ? 'Super Agent Commission Structure' : 'Franchise Commission Structure'}
           </Typography>
           <Typography variant='body2' sx={{ mb: 4, color: 'text.secondary' }}>
-            This commission system supports three types of agents:
+            {selectedRadio === 'SUPER_AGENT'
+              ? 'Super Agents earn 20% commission from total transactions of served agents with KPI-based performance metrics.'
+              : 'Franchises earn 0.05% of gross turnover with performance-based multipliers and paybands.'}
           </Typography>
 
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 4 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'primary.main' }} />
-              <Typography variant='body2'>
-                <strong>Local Agents:</strong> Get direct commission from customer transactions (5% base rate)
-              </Typography>
+          {selectedRadio === 'SUPER_AGENT' ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 4 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'primary.main' }} />
+                <Typography variant='body2'>
+                  <strong>Fixed Commission:</strong> 30% of total eligible commission
+                </Typography>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'success.main' }} />
+                <Typography variant='body2'>
+                  <strong>Variable Commission:</strong> 70% based on KPI performance
+                </Typography>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'warning.main' }} />
+                <Typography variant='body2'>
+                  <strong>Performance Threshold:</strong> Agents must transact ≥ 100,000 TZS
+                </Typography>
+              </Box>
             </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'success.main' }} />
-              <Typography variant='body2'>
-                <strong>Super Agents:</strong> Get 20% of commission from agents they serve (30% fixed + 70% KPI-based)
-              </Typography>
+          ) : (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 4 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'primary.main' }} />
+                <Typography variant='body2'>
+                  <strong>Base Commission:</strong> 0.05% of Capital Advanced
+                </Typography>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'success.main' }} />
+                <Typography variant='body2'>
+                  <strong>Multiplier:</strong> 4.5x turnover requirement
+                </Typography>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'warning.main' }} />
+                <Typography variant='body2'>
+                  <strong>Paybands:</strong> Performance-based apportion rates with clawback
+                </Typography>
+              </Box>
             </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'warning.main' }} />
-              <Typography variant='body2'>
-                <strong>Franchises:</strong> Get commission based on 4.5x turnover multiplier with paybands
-              </Typography>
-            </Box>
-          </Box>
+          )}
         </Grid>
 
         <Grid item xs={12} sm={6}>
           <CustomTextField
             fullWidth
-            label='Base Commission Rate (%)'
             type='number'
-            placeholder='5'
+            label='Base Commission Rate (%)'
+            placeholder={selectedRadio === 'SUPER_AGENT' ? '20' : '0.05'}
             value={formData.commissionRate || ''}
             onChange={e => setFormData({ ...formData, commissionRate: parseFloat(e.target.value) || 0 })}
-            helperText='Default commission rate for local agents (percentage)'
+            helperText={
+              selectedRadio === 'SUPER_AGENT'
+                ? 'Percentage of total commission for super agents (e.g., 20%)'
+                : 'Base commission rate for franchises (e.g., 0.05%)'
+            }
           />
         </Grid>
 
         <Grid item xs={12} sm={6}>
           <CustomTextField
             fullWidth
-            label='Minimum Transaction Amount'
             type='number'
+            label='Minimum Transaction Amount (TZS)'
             placeholder='100000'
             value={formData.minTransactionAmount || ''}
             onChange={e => setFormData({ ...formData, minTransactionAmount: parseFloat(e.target.value) || 0 })}
-            helperText='Minimum amount for commission eligibility (TZS)'
+            helperText='Minimum amount for commission eligibility'
           />
         </Grid>
       </Grid>

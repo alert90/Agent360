@@ -8,7 +8,7 @@ import Grid from '@mui/material/Grid'
 import axios from 'axios'
 
 // ** Type Import
-import { CardStatsType } from 'src/@fake-db/types'
+import { CardStatsType } from 'src/types'
 
 // ** Demo Components Imports
 import CardStatisticsOrder from 'src/views/ui/cards/statistics/CardStatisticsOrder'

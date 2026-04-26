@@ -10,9 +10,6 @@ import FormControlLabel from '@mui/material/FormControlLabel'
 // ** Custom Component Import
 import CustomTextField from 'src/@core/components/mui/text-field'
 
-// ** Third Party Imports
-// DatePicker removed as commission duration is not needed
-
 // ** Types
 import { UsersType } from 'src/types/apps/userTypes'
 
@@ -64,7 +61,7 @@ const StepCommissionDetails = ({ formData, setFormData }: { formData: any; setFo
         <CustomTextField
           fullWidth
           label='Commission Title'
-          placeholder='Monthly Commission 2025'
+          placeholder='October Monthly Commission'
           value={formData.title || ''}
           onChange={e => setFormData({ ...formData, title: e.target.value })}
           helperText='Descriptive name for this commission configuration'
@@ -74,7 +71,7 @@ const StepCommissionDetails = ({ formData, setFormData }: { formData: any; setFo
         <CustomTextField
           fullWidth
           label='Commission Code'
-          placeholder='COMM_2025_01'
+          placeholder='COMM_2026'
           value={formData.code || ''}
           onChange={e => setFormData({ ...formData, code: e.target.value })}
           helperText='Unique identifier for this configuration'
@@ -87,7 +84,7 @@ const StepCommissionDetails = ({ formData, setFormData }: { formData: any; setFo
           multiline
           minRows={3}
           label='Commission Description'
-          placeholder='Commission calculation rules for January 2025'
+          placeholder='Commission calculation rules for January 2026'
           value={formData.description || ''}
           onChange={e => setFormData({ ...formData, description: e.target.value })}
           helperText='Detailed description of this commission configuration'
@@ -108,9 +105,6 @@ const StepCommissionDetails = ({ formData, setFormData }: { formData: any; setFo
           <option value='suspended'>Suspended</option>
         </CustomTextField>
       </Grid>
-
-      {/* Date fields removed as per user requirement - no commission duration needed */}
-
       <Grid item xs={12}>
         <Typography variant='h6' sx={{ mb: 3, mt: 4 }}>
           Assign to Specific Users (Optional)

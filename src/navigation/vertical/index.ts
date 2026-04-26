@@ -141,32 +141,6 @@ const navigation = (): VerticalNavItemsType => {
       ]
     },
     {
-      title: 'Analytics',
-      icon: 'tabler:chart-line',
-      action: 'read',
-      subject: 'analytics',
-      children: [
-        {
-          title: 'Business Analytics',
-          path: '/analytics/business',
-          action: 'analyze',
-          subject: 'analytics'
-        },
-        {
-          title: 'Agent Analytics',
-          path: '/analytics/agent',
-          action: 'analyze',
-          subject: 'analytics'
-        },
-        {
-          title: 'Network Mapping',
-          path: '/analytics/mapping',
-          action: 'read',
-          subject: 'analytics'
-        }
-      ]
-    },
-    {
       sectionTitle: 'Administration'
     },
     {

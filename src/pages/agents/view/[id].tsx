@@ -39,6 +39,7 @@ import DialogContentText from '@mui/material/DialogContentText'
 import Pagination from '@mui/material/Pagination'
 import Snackbar from '@mui/material/Snackbar'
 import { DataGrid } from '@mui/x-data-grid'
+import { CircularProgress } from '@mui/material'
 
 // ** Icon Imports
 import Icon from 'src/@core/components/icon'
@@ -131,6 +132,17 @@ const AgentView = () => {
   const [transactionPage, setTransactionPage] = useState(0)
   const [transactionRowsPerPage, setTransactionRowsPerPage] = useState(25)
   const [assigningAgent, setAssigningAgent] = useState<string | null>(null)
+  const [commissionData, setCommissionData] = useState<any[]>([])
+  const [commissionLoading, setCommissionLoading] = useState(false)
+  const [commissionSearchTerm, setCommissionSearchTerm] = useState('')
+  const [commissionPage, setCommissionPage] = useState(1)
+  const [commissionRowsPerPage, setCommissionRowsPerPage] = useState(25)
+
+  const [selectedCommissionPeriod, setSelectedCommissionPeriod] = useState(() => {
+    const now = new Date()
+
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  })
 
   // Agent search state for manually assigned agents
   const [agentSearchTerm, setAgentSearchTerm] = useState('')
@@ -328,6 +340,276 @@ const AgentView = () => {
     }
   }, [id])
 
+  const calculateCommissions = useCallback(async () => {
+    const agentsToCalculate = transactionAgents.filter(a => a.id !== null)
+
+    if (!agent || agentsToCalculate.length === 0) {
+      console.log('No agents to calculate commissions for')
+      setCommissionData([])
+
+      return
+    }
+
+    setCommissionLoading(true)
+    try {
+      const response = await fetch('/api/commissions/config')
+      if (!response.ok) throw new Error('Failed to fetch commission config')
+
+      const configs = await response.json()
+      const activeConfig = configs.find(
+        (c: any) => c.type === (agent.type === 'super_agent' ? 'SUPER_AGENT' : 'FRANCHISE') && c.status === 'active'
+      )
+
+      if (!activeConfig) {
+        console.log('No active commission config found')
+        setCommissionData([])
+        setCommissionLoading(false)
+
+        return
+      }
+
+      console.log(`Using config: ${activeConfig.title} for ${agentsToCalculate.length} agents`)
+
+      const [year, month] = selectedCommissionPeriod.split('-')
+      const startDate = new Date(parseInt(year), parseInt(month) - 1, 1)
+      const endDate = new Date(parseInt(year), parseInt(month), 0, 23, 59, 59, 999)
+
+      // Process in batches of 50 for better performance
+      const BATCH_SIZE = 50
+      const allResults: any[] = []
+
+      for (let i = 0; i < agentsToCalculate.length; i += BATCH_SIZE) {
+        const batch = agentsToCalculate.slice(i, i + BATCH_SIZE)
+
+        const batchResults = await Promise.all(
+          batch.map(async txAgent => {
+            const totalAgentTransactions = txAgent.total_amount || 0
+            const transactionCount = txAgent.transaction_count || 0
+
+            if (agent.type === 'super_agent') {
+              // Super Agent Commission Calculation
+              const kpiWeights = activeConfig.kpiWeights
+                ? typeof activeConfig.kpiWeights === 'string'
+                  ? JSON.parse(activeConfig.kpiWeights)
+                  : activeConfig.kpiWeights
+                : { activeness: 55, valueTransacted: 20, uniqueAgents: 25 }
+
+              const kpiBands = activeConfig.paybandRates
+                ? typeof activeConfig.paybandRates === 'string'
+                  ? JSON.parse(activeConfig.paybandRates)
+                  : activeConfig.paybandRates
+                : [
+                    { min: 0, max: 50, rate: 0 },
+                    { min: 51, max: 60, rate: 20 },
+                    { min: 61, max: 70, rate: 40 },
+                    { min: 71, max: 80, rate: 60 },
+                    { min: 81, max: 90, rate: 80 },
+                    { min: 91, max: 100, rate: 100 }
+                  ]
+
+              const minThreshold = activeConfig.minTransactionAmount || 100000
+              const minThresholdMet = totalAgentTransactions >= minThreshold
+              const activenessScore = minThresholdMet ? 100 : 0
+              const valueScore = Math.min((totalAgentTransactions / 100000000) * 100, 100)
+              const uniqueScore = transactionCount > 0 ? 100 : 0
+
+              const totalKPIScore =
+                (activenessScore * kpiWeights.activeness) / 100 +
+                (valueScore * kpiWeights.valueTransacted) / 100 +
+                (uniqueScore * kpiWeights.uniqueAgents) / 100
+
+              const applicableBand = kpiBands.find((b: any) => totalKPIScore >= b.min && totalKPIScore <= b.max) || {
+                rate: 0
+              }
+
+              const baseCommission = totalAgentTransactions * (activeConfig.commissionRate || 0.05)
+              const saRate = activeConfig.superAgentCommissionRate || 0.2
+              const eligibleSACommission = baseCommission * saRate
+              const fixedPortion = eligibleSACommission * (activeConfig.superAgentFixedRate || 0.3)
+              const variablePortion =
+                eligibleSACommission * (activeConfig.superAgentVariableRate || 0.7) * (applicableBand.rate / 100)
+              const finalCommission = fixedPortion + variablePortion
+
+              return {
+                agentId: txAgent.id,
+                agentName: txAgent.name,
+                accountNumber: txAgent.account_number,
+                totalTransactions: totalAgentTransactions,
+                transactionCount,
+                isEligible: minThresholdMet,
+                kpiScore: totalKPIScore,
+                kpiBand: applicableBand.rate,
+                baseCommission,
+                fixedPortion,
+                variablePortion,
+                finalCommission,
+                performance: `${totalKPIScore.toFixed(1)}%`
+              }
+            } else {
+              // Franchise Commission Calculation
+              const multiplier = activeConfig.franchiseMultiplier || 4.5
+              const baseRate = activeConfig.franchiseBaseRate || 0.0005
+              const capitalAdvanced = totalAgentTransactions
+
+              let actualTurnover = totalAgentTransactions
+              try {
+                const agentTxResponse = await fetch(`/api/agents/${txAgent.id}/transactions?page=1&limit=10000`)
+                if (agentTxResponse.ok) {
+                  const agentTxData = await agentTxResponse.json()
+                  if (agentTxData.success && agentTxData.data) {
+                    actualTurnover = agentTxData.data
+                      .filter((t: any) => {
+                        const txDate = new Date(t.timestamp || t.createdAt)
+
+                        return txDate >= startDate && txDate <= endDate
+                      })
+                      .reduce((sum: number, t: any) => sum + (t.amount || 0), 0)
+                  }
+                }
+              } catch (e) {
+                console.log(`Could not fetch transactions for agent ${txAgent.id}, using detected amount`)
+              }
+
+              const expectedTurnover = capitalAdvanced * multiplier
+              const performancePct = expectedTurnover > 0 ? Math.min((actualTurnover / expectedTurnover) * 100, 100) : 0
+
+              const paybands = activeConfig.paybandRates
+                ? typeof activeConfig.paybandRates === 'string'
+                  ? JSON.parse(activeConfig.paybandRates)
+                  : activeConfig.paybandRates
+                : [
+                    { min: 100, max: Infinity, name: 'Excellent', apportionRate: 1.0, clawbackPercentage: 0 },
+                    { min: 80, max: 99, name: 'Good', apportionRate: 0.8, clawbackPercentage: 20 },
+                    { min: 60, max: 79, name: 'Average', apportionRate: 0.6, clawbackPercentage: 40 },
+                    { min: 40, max: 59, name: 'Below Average', apportionRate: 0.4, clawbackPercentage: 60 },
+                    { min: 0, max: 39, name: 'Poor', apportionRate: 0.2, clawbackPercentage: 80 }
+                  ]
+
+              const applicablePayband =
+                paybands.find((b: any) => {
+                  const perfRounded = Math.floor(performancePct)
+                  if (b.max === Infinity || b.max === null) {
+                    return perfRounded >= b.min
+                  }
+
+                  return perfRounded >= b.min && perfRounded <= b.max
+                }) || paybands[paybands.length - 1]
+
+              const baseCommission = actualTurnover * baseRate
+              const finalCommission = baseCommission * applicablePayband.apportionRate
+              const clawback = baseCommission * (applicablePayband.clawbackPercentage / 100)
+
+              return {
+                agentId: txAgent.id,
+                agentName: txAgent.name,
+                accountNumber: txAgent.account_number,
+                totalTransactions: actualTurnover,
+                transactionCount,
+                capitalAdvanced,
+                expectedTurnover,
+                actualTurnover,
+                performancePct,
+                payband: applicablePayband.name,
+                apportionRate: applicablePayband.apportionRate,
+                baseCommission,
+                finalCommission,
+                clawback,
+                performance: `${performancePct.toFixed(1)}%`
+              }
+            }
+          })
+        )
+
+        allResults.push(...batchResults)
+
+        // Update progress incrementally for large datasets
+        if (agentsToCalculate.length > 100) {
+          setCommissionData([...allResults])
+        }
+      }
+
+      // Filter out any null/undefined results
+      const validResults = allResults.filter(r => r !== null && r !== undefined)
+      setCommissionData(validResults)
+      console.log(`Calculated commissions for ${validResults.length} agents`)
+    } catch (error) {
+      console.error('Error calculating commissions:', error)
+      setCommissionData([])
+    } finally {
+      setCommissionLoading(false)
+    }
+  }, [agent, transactionAgents, selectedCommissionPeriod])
+
+  const filteredCommissionData = useMemo(() => {
+    let filtered = commissionData
+
+    if (commissionSearchTerm) {
+      const searchLower = commissionSearchTerm.toLowerCase()
+      filtered = filtered.filter(
+        c => c.agentName?.toLowerCase().includes(searchLower) || c.accountNumber?.toLowerCase().includes(searchLower)
+      )
+    }
+
+    return filtered
+  }, [commissionData, commissionSearchTerm])
+
+  const paginatedCommissionData = useMemo(() => {
+    const start = (commissionPage - 1) * commissionRowsPerPage
+    const end = start + commissionRowsPerPage
+
+    return filteredCommissionData.slice(start, end)
+  }, [filteredCommissionData, commissionPage, commissionRowsPerPage])
+
+  const totalCommissionPages = Math.ceil(filteredCommissionData.length / commissionRowsPerPage)
+
+  const getSuperAgentPerformanceLabel = (kpiScore: number) => {
+    if (kpiScore >= 91) return { label: 'Excellent', color: 'success' as const }
+    if (kpiScore >= 81) return { label: 'Very Good', color: 'success' as const }
+    if (kpiScore >= 71) return { label: 'Good', color: 'primary' as const }
+    if (kpiScore >= 61) return { label: 'Average', color: 'warning' as const }
+    if (kpiScore >= 51) return { label: 'Below Average', color: 'warning' as const }
+
+    return { label: 'Poor', color: 'error' as const }
+  }
+
+  const getFranchisePerformanceLabel = (payband: string) => {
+    switch (payband) {
+      case 'Excellent':
+        return { label: 'Excellent', color: 'success' as const }
+      case 'Good':
+        return { label: 'Good', color: 'primary' as const }
+      case 'Average':
+        return { label: 'Average', color: 'warning' as const }
+      case 'Below Average':
+        return { label: 'Below Average', color: 'warning' as const }
+      case 'Poor':
+        return { label: 'Poor', color: 'error' as const }
+      default:
+        return { label: payband || 'N/A', color: 'default' as const }
+    }
+  }
+
+  // Trigger calculation when tab changes to commission
+  useEffect(() => {
+    if (currentTab === 'commission' && agent && transactionAgents.length > 0) {
+      calculateCommissions()
+    }
+  }, [currentTab, agent, transactionAgents, calculateCommissions])
+
+  // Add helper to get period options
+  const getCommissionPeriodOptions = () => {
+    const options = []
+    const now = new Date()
+    for (let i = 0; i < 12; i++) {
+      const date = new Date(now.getFullYear(), now.getMonth() - i, 1)
+      const period = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+      const label = date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
+      options.push({ value: period, label })
+    }
+
+    return options
+  }
+
   // Handle assign with styled dialog
   const openAssignConfirmDialog = (targetAgentId: number, accountNumber: string, currentParentId: number | null) => {
     if (currentParentId && currentParentId !== agent?.id) {
@@ -468,6 +750,10 @@ const AgentView = () => {
       } else if (currentTab === 'account') {
         fetchAssociatedAgents()
         fetchTransactionAgents()
+      } else if (currentTab === 'commission') {
+        fetchAssociatedAgents()
+        fetchTransactionAgents()
+        fetchTransactions()
       }
     }
   }, [agent, currentTab, fetchAssociatedAgents, fetchTransactions, fetchTransactionAgents])
@@ -502,7 +788,7 @@ const AgentView = () => {
       case 'super_agent':
         return 'primary'
       case 'franchise':
-        return 'secondary'
+        return 'info'
       case 'local_agent':
         return 'default'
       default:
@@ -647,6 +933,7 @@ const AgentView = () => {
             <Tab label='Transactions' value='transactions' />
             <Tab label='Account' value='account' />
             {shouldShowAgentsTab() && <Tab label='Agents' value='agents' />}
+            {shouldShowAgentsTab() && <Tab label='Commissions' value='commission' />}
           </TabList>
         </Box>
 
@@ -1380,8 +1667,305 @@ const AgentView = () => {
             </CardContent>
           </Card>
         </TabPanel>
-      </TabContext>
+        {/* Commission Tab */}
+        {shouldShowAgentsTab() && (
+          <TabPanel value='commission'>
+            <Card sx={{ mb: 4 }}>
+              <CardHeader
+                title={`${agent?.type === 'super_agent' ? 'Super Agent' : 'Franchise'} Commission`}
+                subheader={`Calculated for ${transactionAgents.filter(a => a.id !== null).length} detected agents`}
+              />
+              <CardContent>
+                {/* Period Selector & Controls */}
+                <Grid container spacing={3} sx={{ mb: 4 }}>
+                  <Grid item xs={12} md={3}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                      <FormControl size='small' sx={{ minWidth: 180 }}>
+                        <Select
+                          value={selectedCommissionPeriod}
+                          onChange={e => setSelectedCommissionPeriod(e.target.value)}
+                        >
+                          {getCommissionPeriodOptions().map(option => (
+                            <MenuItem key={option.value} value={option.value}>
+                              {option.label}
+                            </MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <TextField
+                      fullWidth
+                      size='small'
+                      placeholder='Search by agent name or account number...'
+                      value={commissionSearchTerm}
+                      onChange={e => {
+                        setCommissionSearchTerm(e.target.value)
+                        setCommissionPage(1)
+                      }}
+                      InputProps={{
+                        startAdornment: (
+                          <InputAdornment position='start'>
+                            <Icon icon='tabler:search' />
+                          </InputAdornment>
+                        )
+                      }}
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={3}>
+                    <FormControl fullWidth size='small'>
+                      <InputLabel>Rows per page</InputLabel>
+                      <Select
+                        value={commissionRowsPerPage}
+                        label='Rows per page'
+                        onChange={e => {
+                          setCommissionRowsPerPage(Number(e.target.value))
+                          setCommissionPage(1)
+                        }}
+                      >
+                        <MenuItem value={25}>25</MenuItem>
+                        <MenuItem value={50}>50</MenuItem>
+                        <MenuItem value={100}>100</MenuItem>
+                        <MenuItem value={250}>250</MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                  <Grid item xs={12} md={2}>
+                    <Button
+                      fullWidth
+                      variant='outlined'
+                      size='small'
+                      onClick={calculateCommissions}
+                      startIcon={<Icon icon='tabler:refresh' />}
+                    >
+                      Recalculate
+                    </Button>
+                  </Grid>
+                </Grid>
 
+                {/* Summary Cards */}
+                {commissionData.length > 0 && (
+                  <Grid container spacing={3} sx={{ mb: 4 }}>
+                    <Grid item xs={6} md={3}>
+                      <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                        <Icon icon='tabler:users' fontSize='1.5rem' color='primary' />
+                        <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
+                          {commissionData.length}
+                        </Typography>
+                        <Typography variant='caption' color='text.secondary'>
+                          Agents Served
+                        </Typography>
+                      </Card>
+                    </Grid>
+                    <Grid item xs={6} md={3}>
+                      <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                        <Icon icon='tabler:currency-dollar' fontSize='1.5rem' color='success' />
+                        <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
+                          TZS {commissionData.reduce((sum, c) => sum + (c.finalCommission || 0), 0).toLocaleString()}
+                        </Typography>
+                        <Typography variant='caption' color='text.secondary'>
+                          Total Commission
+                        </Typography>
+                      </Card>
+                    </Grid>
+                    <Grid item xs={6} md={3}>
+                      <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                        <Icon icon='tabler:exchange' fontSize='1.5rem' color='warning' />
+                        <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
+                          {commissionData.reduce((sum, c) => sum + (c.transactionCount || 0), 0).toLocaleString()}
+                        </Typography>
+                        <Typography variant='caption' color='text.secondary'>
+                          Total Transactions
+                        </Typography>
+                      </Card>
+                    </Grid>
+                    <Grid item xs={6} md={3}>
+                      <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                        <Icon icon='tabler:chart-bar' fontSize='1.5rem' color='info' />
+                        <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
+                          TZS{' '}
+                          {(commissionData.length > 0
+                            ? commissionData.reduce((sum, c) => sum + (c.finalCommission || 0), 0) /
+                              commissionData.length
+                            : 0
+                          ).toLocaleString()}
+                        </Typography>
+                        <Typography variant='caption' color='text.secondary'>
+                          Avg Commission
+                        </Typography>
+                      </Card>
+                    </Grid>
+                  </Grid>
+                )}
+
+                {/* Commission Table */}
+                {commissionLoading ? (
+                  <Box sx={{ textAlign: 'center', py: 6 }}>
+                    <CircularProgress />
+                    <Typography variant='body2' sx={{ mt: 2, color: 'text.secondary' }}>
+                      Calculating commissions for {transactionAgents.filter(a => a.id !== null).length} agents...
+                    </Typography>
+                  </Box>
+                ) : commissionData.length > 0 ? (
+                  <>
+                    <TableContainer component={Paper}>
+                      <Table size='small'>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell sx={{ fontWeight: 600 }}>Agent</TableCell>
+                            {agent?.type === 'franchise' && (
+                              <TableCell align='right' sx={{ fontWeight: 600 }}>
+                                Capital Advanced
+                              </TableCell>
+                            )}
+                            <TableCell align='right' sx={{ fontWeight: 600 }}>
+                              Agent Transactions
+                            </TableCell>
+                            <TableCell align='center' sx={{ fontWeight: 600 }}>
+                              Tx Count
+                            </TableCell>
+                            <TableCell sx={{ fontWeight: 600, minWidth: 220 }}>Performance</TableCell>
+                            <TableCell align='right' sx={{ fontWeight: 600 }}>
+                              Commission
+                            </TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {paginatedCommissionData.map((calc, index) => {
+                            let perfLabel: { label: string; color: any }
+                            let perfValue: number
+
+                            if (agent?.type === 'super_agent') {
+                              perfValue = (calc as any).kpiScore || 0
+                              perfLabel = getSuperAgentPerformanceLabel(perfValue)
+                            } else {
+                              perfValue = (calc as any).performancePct || 0
+                              perfLabel = getFranchisePerformanceLabel((calc as any).payband || '')
+                            }
+
+                            return (
+                              <TableRow key={index} hover>
+                                <TableCell>
+                                  <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                                    <Typography variant='body2' fontWeight='medium'>
+                                      {calc.agentName}
+                                    </Typography>
+                                    <Typography variant='caption' color='text.secondary'>
+                                      {calc.accountNumber}
+                                    </Typography>
+                                  </Box>
+                                </TableCell>
+                                {agent?.type === 'franchise' && (
+                                  <TableCell align='right'>
+                                    <Typography variant='body2'>
+                                      TZS {(calc as any).capitalAdvanced?.toLocaleString() || 'N/A'}
+                                    </Typography>
+                                    {(calc as any).expectedTurnover > 0 && (
+                                      <Typography variant='caption' color='text.secondary' display='block'>
+                                        Expected: TZS {(calc as any).expectedTurnover?.toLocaleString()}
+                                      </Typography>
+                                    )}
+                                  </TableCell>
+                                )}
+                                <TableCell align='right'>
+                                  <Typography variant='body2' fontWeight='medium'>
+                                    TZS {calc.totalTransactions?.toLocaleString() || 0}
+                                  </Typography>
+                                </TableCell>
+                                <TableCell align='center'>
+                                  <Typography variant='body2'>{calc.transactionCount}</Typography>
+                                </TableCell>
+                                <TableCell>
+                                  {/* Performance Label ABOVE the progress bar */}
+                                  <Box sx={{ mb: 0.5 }}>
+                                    <Chip
+                                      label={`${perfLabel.label} (${perfValue.toFixed(0)}%)`}
+                                      size='small'
+                                      color={perfLabel.color}
+                                      variant='outlined'
+                                      sx={{ height: 20, fontSize: '0.7rem' }}
+                                    />
+                                  </Box>
+                                  {/* Progress Bar BELOW the label */}
+                                  <LinearProgress
+                                    variant='determinate'
+                                    value={Math.min(perfValue, 100)}
+                                    sx={{
+                                      height: 6,
+                                      borderRadius: 3,
+                                      '& .MuiLinearProgress-bar': {
+                                        borderRadius: 3,
+                                        bgcolor:
+                                          perfValue >= 80
+                                            ? 'success.main'
+                                            : perfValue >= 60
+                                            ? 'primary.main'
+                                            : perfValue >= 40
+                                            ? 'warning.main'
+                                            : 'error.main'
+                                      }
+                                    }}
+                                  />
+                                </TableCell>
+                                <TableCell align='right'>
+                                  <Typography variant='body2' fontWeight='bold' color='success.main'>
+                                    TZS {calc.finalCommission?.toLocaleString() || 0}
+                                  </Typography>
+                                  {(calc as any).clawback > 0 && (
+                                    <Typography variant='caption' color='error.main' display='block'>
+                                      Clawback: TZS {(calc as any).clawback?.toLocaleString()}
+                                    </Typography>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            )
+                          })}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+
+                    {/* Pagination */}
+                    {totalCommissionPages > 1 && (
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 4 }}>
+                        <Typography variant='body2' color='text.secondary'>
+                          Showing {paginatedCommissionData.length} of {filteredCommissionData.length} agents
+                        </Typography>
+                        <Pagination
+                          count={totalCommissionPages}
+                          page={commissionPage}
+                          onChange={(_, page) => setCommissionPage(page)}
+                          color='primary'
+                          showFirstButton
+                          showLastButton
+                          size='medium'
+                        />
+                      </Box>
+                    )}
+                  </>
+                ) : (
+                  <Box sx={{ textAlign: 'center', py: 6 }}>
+                    <Icon icon='tabler:calculator' fontSize='3rem' color='text.secondary' />
+                    <Typography variant='h6' sx={{ mt: 2 }}>
+                      No Commission Data
+                    </Typography>
+                    <Typography variant='body2' color='text.secondary' sx={{ mb: 2 }}>
+                      Click "Recalculate" to compute commissions for the selected period.
+                    </Typography>
+                    <Button
+                      variant='outlined'
+                      onClick={calculateCommissions}
+                      startIcon={<Icon icon='tabler:refresh' />}
+                    >
+                      Recalculate
+                    </Button>
+                  </Box>
+                )}
+              </CardContent>
+            </Card>
+          </TabPanel>
+        )}
+      </TabContext>
       {/* Confirmation Dialog */}
       <Dialog open={confirmDialogOpen} onClose={() => setConfirmDialogOpen(false)}>
         <DialogTitle>Confirm Action</DialogTitle>

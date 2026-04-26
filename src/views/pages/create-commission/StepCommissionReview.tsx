@@ -1,3 +1,4 @@
+// src/views/pages/create-commission/StepCommissionReview.tsx
 // ** React Imports
 import { useState } from 'react'
 
@@ -15,398 +16,570 @@ import FormControlLabel from '@mui/material/FormControlLabel'
 import Card from '@mui/material/Card'
 import CardContent from '@mui/material/CardContent'
 import CardHeader from '@mui/material/CardHeader'
-import Button from '@mui/material/Button'
+import Chip from '@mui/material/Chip'
+import Divider from '@mui/material/Divider'
+
+// ** Icon Imports
+import Icon from 'src/@core/components/icon'
 
 // ** Custom Components Imports
 import CustomChip from 'src/@core/components/mui/chip'
 
-// ** Third Party Imports
-import toast from 'react-hot-toast'
-
 interface StepCommissionReviewProps {
   formData: any
   onSuccess?: () => void
+  onConfirmedChange?: (confirmed: boolean) => void
 }
 
-const StepCommissionReview = ({ formData, onSuccess }: StepCommissionReviewProps) => {
+const StepCommissionReview = ({ formData, onConfirmedChange }: StepCommissionReviewProps) => {
   const [confirmed, setConfirmed] = useState(false)
-  const [saving, setSaving] = useState(false)
 
-  const handleSubmit = async () => {
-    if (!confirmed) {
-      toast.error('Please confirm the commission details before submitting')
+  const isSuperAgent = formData.type === 'SUPER_AGENT'
 
-      return
-    }
-
-    setSaving(true)
-    try {
-      // Validate KPI weights
-      const totalWeight =
-        (formData.kpiWeights?.activeness || 0) +
-        (formData.kpiWeights?.valueTransacted || 0) +
-        (formData.kpiWeights?.uniqueAgents || 0)
-
-      if (totalWeight !== 100) {
-        toast.error('KPI weights must total 100%')
-        setSaving(false)
-
-        return
-      }
-
-      // Prepare config data for API (no dates as per user requirement)
-      const configData = {
-        title: formData.title,
-        code: formData.code,
-        description: formData.description,
-        type: formData.type,
-        value: formData.commissionRate,
-        agentType: 'all',
-        status: formData.status,
-        minTransactionAmount: formData.minTransactionAmount,
-        commissionRate: formData.commissionRate,
-        superAgentCommissionRate: formData.superAgentCommissionRate,
-        superAgentFixedRate: formData.superAgentFixedRate,
-        superAgentVariableRate: formData.superAgentVariableRate,
-        franchiseMultiplier: formData.franchiseMultiplier,
-        kpiWeights: formData.kpiWeights,
-        assignedUsers: formData.assignedUsers || []
-      }
-
-      const method = formData.id ? 'PUT' : 'POST'
-      const url = formData.id ? `/api/commission-configs/${formData.id}` : '/api/commission-configs'
-
-      const response = await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(configData)
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.message || 'Failed to save commission configuration')
-      }
-
-      const result = await response.json()
-      toast.success('Commission configuration saved successfully!')
-
-      // Call onSuccess callback if provided
-      if (onSuccess) {
-        onSuccess()
-      }
-
-      console.log('Saved config:', result)
-    } catch (error) {
-      console.error('Save error:', error)
-      toast.error(error instanceof Error ? error.message : 'Failed to save commission configuration')
-    } finally {
-      setSaving(false)
+  const handleConfirmationChange = (checked: boolean) => {
+    setConfirmed(checked)
+    if (onConfirmedChange) {
+      onConfirmedChange(checked)
     }
   }
 
   return (
-    <Grid container spacing={6}>
-      <Grid item xs={12} lg={8} xl={9}>
-        <Grid container spacing={2}>
-          <Grid item xs={12}>
-            <Typography variant='h4' sx={{ mb: 4 }}>
-              Review Configuration 🚀
+    <Box sx={{ width: '100%' }}>
+      <Grid container spacing={6}>
+        {/* Header */}
+        <Grid item xs={12}>
+          <Box sx={{ mb: 2 }}>
+            <Typography variant='h4' sx={{ mb: 1 }}>
+              Review Configuration
             </Typography>
-            <Typography sx={{ mb: 4, color: 'text.secondary' }}>
-              Please review your commission configuration details below and confirm before saving.
+            <Typography sx={{ color: 'text.secondary' }}>
+              Please review your {isSuperAgent ? 'Super Agent' : 'Franchise'} commission configuration below and confirm
+              before saving.
             </Typography>
-          </Grid>
-
-          {/* Basic Configuration */}
-          <Grid item xs={12}>
-            <Card>
-              <CardHeader title='Basic Configuration' titleTypographyProps={{ variant: 'h6' }} />
-              <CardContent>
-                <TableContainer>
-                  <Table>
-                    <TableBody
-                      sx={{
-                        '& .MuiTableCell-root': {
-                          borderBottom: 0,
-                          verticalAlign: 'top',
-                          '&:last-of-type': { px: '0 !important' },
-                          '&:first-of-type': { pl: '0 !important' },
-                          py: theme => `${theme.spacing(0.75)} !important`
-                        }
-                      }}
-                    >
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
-                            Commission Title
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ color: 'text.secondary' }}>{formData.title || 'Not set'}</Typography>
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
-                            Commission Code
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <CustomChip
-                            rounded
-                            size='small'
-                            skin='light'
-                            color='primary'
-                            label={formData.code || 'Not set'}
-                          />
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
-                            Description
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ color: 'text.secondary' }}>{formData.description || 'Not set'}</Typography>
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
-                            Status
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <CustomChip
-                            rounded
-                            size='small'
-                            skin='light'
-                            color={formData.status === 'active' ? 'success' : 'warning'}
-                            label={formData.status || 'active'}
-                          />
-                        </TableCell>
-                      </TableRow>
-                      {/* Duration removed as commission duration is not needed per user requirements */}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* Commission Rates */}
-          <Grid item xs={12}>
-            <Card>
-              <CardHeader title='Commission Rates' titleTypographyProps={{ variant: 'h6' }} />
-              <CardContent>
-                <TableContainer>
-                  <Table>
-                    <TableBody
-                      sx={{
-                        '& .MuiTableCell-root': {
-                          borderBottom: 0,
-                          verticalAlign: 'top',
-                          '&:last-of-type': { px: '0 !important' },
-                          '&:first-of-type': { pl: '0 !important' },
-                          py: theme => `${theme.spacing(0.75)} !important`
-                        }
-                      }}
-                    >
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
-                            Base Commission Rate
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ color: 'text.secondary' }}>
-                            {formData.commissionRate ? (formData.commissionRate * 100).toFixed(1) : 0}% for local agents
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
-                            Minimum Transaction Amount
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ color: 'text.secondary' }}>
-                            TZS {formData.minTransactionAmount?.toLocaleString() || '100,000'}
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
-                            Super Agent Commission Rate
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ color: 'text.secondary' }}>
-                            {formData.superAgentCommissionRate
-                              ? (formData.superAgentCommissionRate * 100).toFixed(1)
-                              : 20}
-                            % of total commission
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
-                            Fixed Portion (Super Agent)
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ color: 'text.secondary' }}>
-                            {formData.superAgentFixedRate ? (formData.superAgentFixedRate * 100).toFixed(1) : 6}% of
-                            super agent commission
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
-                            Variable Portion (Super Agent)
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ color: 'text.secondary' }}>
-                            {formData.superAgentVariableRate ? (formData.superAgentVariableRate * 100).toFixed(1) : 14}%
-                            of super agent commission
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
-                            Franchise Multiplier
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ color: 'text.secondary' }}>
-                            {formData.franchiseMultiplier || 4.5}x for expected turnover calculation
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* KPI Weights */}
-          <Grid item xs={12}>
-            <Card>
-              <CardHeader title='KPI Weights Configuration' titleTypographyProps={{ variant: 'h6' }} />
-              <CardContent>
-                <TableContainer>
-                  <Table>
-                    <TableBody
-                      sx={{
-                        '& .MuiTableCell-root': {
-                          borderBottom: 0,
-                          verticalAlign: 'top',
-                          '&:last-of-type': { px: '0 !important' },
-                          '&:first-of-type': { pl: '0 !important' },
-                          py: theme => `${theme.spacing(0.75)} !important`
-                        }
-                      }}
-                    >
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
-                            Activeness Weight
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ color: 'text.secondary' }}>
-                            {formData.kpiWeights?.activeness || 0}%
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
-                            Value Transacted Weight
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ color: 'text.secondary' }}>
-                            {formData.kpiWeights?.valueTransacted || 0}%
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
-                            Unique Agents Weight
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ color: 'text.secondary' }}>
-                            {formData.kpiWeights?.uniqueAgents || 0}%
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell>
-                          <Typography noWrap sx={{ fontWeight: 600, color: 'text.secondary' }}>
-                            Total Weight
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography
-                            sx={{
-                              fontWeight: 600,
-                              color:
-                                (formData.kpiWeights?.activeness || 0) +
-                                  (formData.kpiWeights?.valueTransacted || 0) +
-                                  (formData.kpiWeights?.uniqueAgents || 0) ===
-                                100
-                                  ? 'success.main'
-                                  : 'error.main'
-                            }}
-                          >
-                            {(formData.kpiWeights?.activeness || 0) +
-                              (formData.kpiWeights?.valueTransacted || 0) +
-                              (formData.kpiWeights?.uniqueAgents || 0)}
-                            %
-                            {(formData.kpiWeights?.activeness || 0) +
-                              (formData.kpiWeights?.valueTransacted || 0) +
-                              (formData.kpiWeights?.uniqueAgents || 0) !==
-                              100 && ' (Must equal 100%)'}
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          <Grid item xs={12}>
-            <FormControlLabel
-              control={<Switch checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />}
-              label='I have reviewed and confirmed all commission configuration details.'
+          </Box>
+          <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+            <Chip
+              label={isSuperAgent ? 'Super Agent' : 'Franchise'}
+              color={isSuperAgent ? 'primary' : 'info'}
+              size='small'
+              variant='outlined'
             />
-          </Grid>
+            <Chip
+              label={formData.status || 'active'}
+              color={formData.status === 'active' ? 'success' : 'warning'}
+              size='small'
+              variant='outlined'
+            />
+          </Box>
+        </Grid>
 
-          <Grid item xs={12}>
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Button variant='contained' size='large' onClick={handleSubmit} disabled={!confirmed || saving}>
-                {saving ? 'Saving...' : 'Save Configuration'}
-              </Button>
-            </Box>
-          </Grid>
+        {/* Basic Configuration */}
+        <Grid item xs={12}>
+          <Card>
+            <CardHeader
+              title='Basic Configuration'
+              titleTypographyProps={{ variant: 'h6' }}
+              avatar={<Icon icon='tabler:settings' fontSize='1.5rem' />}
+            />
+            <Divider />
+            <CardContent>
+              <TableContainer>
+                <Table>
+                  <TableBody
+                    sx={{
+                      '& .MuiTableCell-root': {
+                        borderBottom: '0',
+                        borderColor: 'divider',
+                        verticalAlign: 'top',
+                        '&:last-of-type': { px: '0 !important' },
+                        '&:first-of-type': { pl: '0 !important' },
+                        py: theme => `${theme.spacing(1.25)} !important`
+                      }
+                    }}
+                  >
+                    <TableRow>
+                      <TableCell sx={{ width: '30%' }}>
+                        <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                          Commission Title
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography sx={{ color: 'text.primary', fontWeight: 500 }}>
+                          {formData.title || 'Not set'}
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell>
+                        <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                          Commission Code
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <CustomChip
+                          rounded
+                          size='small'
+                          skin='light'
+                          color='primary'
+                          label={formData.code || 'Not set'}
+                        />
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell>
+                        <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                          Description
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography sx={{ color: 'text.primary' }}>
+                          {formData.description || 'No description provided'}
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell>
+                        <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                          Commission Type
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={isSuperAgent ? 'Super Agent Commission' : 'Franchise Commission'}
+                          color={isSuperAgent ? 'primary' : 'info'}
+                          size='small'
+                        />
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell>
+                        <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                          Date Range
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography sx={{ color: 'text.primary' }}>
+                          {formData.startDate
+                            ? `${new Date(formData.startDate + 'T00:00:00').toLocaleDateString()} - ${
+                                formData.endDate
+                                  ? new Date(formData.endDate + 'T00:00:00').toLocaleDateString()
+                                  : 'Ongoing'
+                              }`
+                            : 'Not specified'}
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell>
+                        <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                          Status
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <CustomChip
+                          rounded
+                          size='small'
+                          skin='light'
+                          color={formData.status === 'active' ? 'success' : 'warning'}
+                          label={formData.status || 'active'}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Commission Rates */}
+        <Grid item xs={12}>
+          <Card>
+            <CardHeader
+              title={isSuperAgent ? 'Super Agent Commission Structure' : 'Franchise Commission Structure'}
+              titleTypographyProps={{ variant: 'h6' }}
+              avatar={<Icon icon='tabler:percentage' fontSize='1.5rem' />}
+            />
+            <Divider />
+            <CardContent>
+              {isSuperAgent ? (
+                <>
+                  {/* Super Agent Commission Breakdown */}
+                  <Typography variant='subtitle2' sx={{ mb: 2, color: 'primary.main' }}>
+                    Commission Breakdown
+                  </Typography>
+                  <TableContainer>
+                    <Table>
+                      <TableBody
+                        sx={{
+                          '& .MuiTableCell-root': {
+                            borderBottom: '0',
+                            borderColor: 'divider',
+                            verticalAlign: 'top',
+                            '&:last-of-type': { px: '0 !important' },
+                            '&:first-of-type': { pl: '0 !important' },
+                            py: theme => `${theme.spacing(1.25)} !important`
+                          }
+                        }}
+                      >
+                        <TableRow>
+                          <TableCell sx={{ width: '35%' }}>
+                            <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                              Super Agent Commission Rate
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ color: 'text.primary', fontWeight: 500 }}>
+                              {formData.superAgentCommissionRate
+                                ? (formData.superAgentCommissionRate * 100).toFixed(1)
+                                : '20.0'}
+                              % of total agent commissions
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell>
+                            <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                              Fixed Commission Portion
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ color: 'text.primary' }}>
+                              {formData.superAgentFixedRate ? (formData.superAgentFixedRate * 100).toFixed(1) : '30.0'}%
+                              (Guaranteed)
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell>
+                            <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                              Variable Commission Portion
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ color: 'text.primary' }}>
+                              {formData.superAgentVariableRate
+                                ? (formData.superAgentVariableRate * 100).toFixed(1)
+                                : '70.0'}
+                              % (KPI-based)
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                        <TableRow sx={{ '& .MuiTableCell-root': { borderBottom: 0 } }}>
+                          <TableCell>
+                            <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                              Performance Threshold
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ color: 'text.primary' }}>
+                              TZS {formData.minTransactionAmount?.toLocaleString() || '100,000'} minimum per agent
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </>
+              ) : (
+                <>
+                  {/* Franchise Commission Settings */}
+                  <Typography variant='subtitle2' sx={{ mb: 2, color: 'info.main' }}>
+                    Commission Model
+                  </Typography>
+                  <TableContainer>
+                    <Table>
+                      <TableBody
+                        sx={{
+                          '& .MuiTableCell-root': {
+                            borderBottom: '0',
+                            borderColor: 'divider',
+                            verticalAlign: 'top',
+                            '&:last-of-type': { px: '0 !important' },
+                            '&:first-of-type': { pl: '0 !important' },
+                            py: theme => `${theme.spacing(1.25)} !important`
+                          }
+                        }}
+                      >
+                        <TableRow>
+                          <TableCell sx={{ width: '35%' }}>
+                            <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                              Base Commission Rate
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ color: 'text.primary', fontWeight: 500 }}>
+                              {formData.franchiseBaseRate ? (formData.franchiseBaseRate * 100).toFixed(2) : '0.05'}% of
+                              gross turnover
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell>
+                            <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                              Turnover Multiplier
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ color: 'text.primary' }}>
+                              {formData.franchiseMultiplier || '4.5'}x capital advanced
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell>
+                            <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                              Performance Requirement
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ color: 'text.primary' }}>
+                              ≥ {(formData.franchiseMultiplier || 4.5) * 100}% of deposited capital
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                        <TableRow sx={{ '& .MuiTableCell-root': { borderBottom: 0 } }}>
+                          <TableCell>
+                            <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                              Minimum Transaction
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ color: 'text.primary' }}>
+                              TZS {formData.minTransactionAmount?.toLocaleString() || '100,000'}
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* KPI Weights / Paybands */}
+        <Grid item xs={12}>
+          <Card>
+            <CardHeader
+              title={isSuperAgent ? 'KPI Weights Configuration' : 'Performance Paybands'}
+              titleTypographyProps={{ variant: 'h6' }}
+              avatar={<Icon icon={isSuperAgent ? 'tabler:chart-bar' : 'tabler:chart-pie'} fontSize='1.5rem' />}
+            />
+            <Divider />
+            <CardContent>
+              {isSuperAgent ? (
+                <>
+                  {/* KPI Weights Table */}
+                  <TableContainer>
+                    <Table>
+                      <TableBody
+                        sx={{
+                          '& .MuiTableCell-root': {
+                            borderBottom: '0',
+                            borderColor: 'divider',
+                            verticalAlign: 'top',
+                            '&:last-of-type': { px: '0 !important' },
+                            '&:first-of-type': { pl: '0 !important' },
+                            py: theme => `${theme.spacing(1.25)} !important`
+                          }
+                        }}
+                      >
+                        <TableRow>
+                          <TableCell sx={{ width: '35%' }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                              <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'primary.main' }} />
+                              <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                                Agent Activeness
+                              </Typography>
+                            </Box>
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ color: 'text.primary', fontWeight: 500 }}>
+                              {formData.kpiWeights?.activeness || 55}%
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                              <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'success.main' }} />
+                              <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                                Value Transacted
+                              </Typography>
+                            </Box>
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ color: 'text.primary', fontWeight: 500 }}>
+                              {formData.kpiWeights?.valueTransacted || 20}%
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                              <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'warning.main' }} />
+                              <Typography noWrap sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                                Unique Agents
+                              </Typography>
+                            </Box>
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ color: 'text.primary', fontWeight: 500 }}>
+                              {formData.kpiWeights?.uniqueAgents || 25}%
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                        <TableRow sx={{ '& .MuiTableCell-root': { borderBottom: 0 } }}>
+                          <TableCell>
+                            <Typography noWrap sx={{ fontWeight: 600, color: 'text.secondary' }}>
+                              Total Weight
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                              <Typography
+                                sx={{
+                                  fontWeight: 600,
+                                  color:
+                                    (formData.kpiWeights?.activeness || 0) +
+                                      (formData.kpiWeights?.valueTransacted || 0) +
+                                      (formData.kpiWeights?.uniqueAgents || 0) ===
+                                    100
+                                      ? 'success.main'
+                                      : 'error.main'
+                                }}
+                              >
+                                {(formData.kpiWeights?.activeness || 0) +
+                                  (formData.kpiWeights?.valueTransacted || 0) +
+                                  (formData.kpiWeights?.uniqueAgents || 0)}
+                                %
+                              </Typography>
+                              {(formData.kpiWeights?.activeness || 0) +
+                                (formData.kpiWeights?.valueTransacted || 0) +
+                                (formData.kpiWeights?.uniqueAgents || 0) !==
+                                100 && <Chip label='Must equal 100%' color='error' size='small' variant='outlined' />}
+                            </Box>
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </>
+              ) : (
+                <>
+                  {/* Paybands Table */}
+                  <TableContainer>
+                    <Table>
+                      <TableBody
+                        sx={{
+                          '& .MuiTableCell-root': {
+                            borderBottom: '0',
+                            borderColor: 'divider',
+                            py: theme => `${theme.spacing(1.25)} !important`
+                          }
+                        }}
+                      >
+                        {(
+                          formData.paybands || [
+                            { min: 100, max: Infinity, name: 'Excellent', apportionRate: 1.0, clawbackPercentage: 0 },
+                            { min: 80, max: 99, name: 'Good', apportionRate: 0.8, clawbackPercentage: 20 },
+                            { min: 60, max: 79, name: 'Average', apportionRate: 0.6, clawbackPercentage: 40 },
+                            { min: 40, max: 59, name: 'Below Average', apportionRate: 0.4, clawbackPercentage: 60 },
+                            { min: 0, max: 39, name: 'Poor', apportionRate: 0.2, clawbackPercentage: 80 }
+                          ]
+                        ).map((payband: any, index: number) => (
+                          <TableRow key={index}>
+                            <TableCell sx={{ width: '25%' }}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Box
+                                  sx={{
+                                    width: 12,
+                                    height: 12,
+                                    borderRadius: '50%',
+                                    bgcolor:
+                                      payband.name === 'Excellent'
+                                        ? 'success.main'
+                                        : payband.name === 'Good'
+                                        ? 'primary.main'
+                                        : payband.name === 'Average'
+                                        ? 'warning.main'
+                                        : payband.name === 'Below Average'
+                                        ? 'error.light'
+                                        : 'error.main'
+                                  }}
+                                />
+                                <Typography variant='body2' sx={{ fontWeight: 600 }}>
+                                  {payband.name}
+                                </Typography>
+                              </Box>
+                            </TableCell>
+                            <TableCell sx={{ width: '25%' }}>
+                              <Typography variant='body2' color='text.secondary'>
+                                {payband.min}%{payband.max === Infinity ? '+' : ` - ${payband.max}%`}
+                              </Typography>
+                            </TableCell>
+                            <TableCell sx={{ width: '25%' }}>
+                              <Chip
+                                label={`Apportion: ${(payband.apportionRate * 100).toFixed(0)}%`}
+                                size='small'
+                                color={
+                                  payband.apportionRate >= 0.8
+                                    ? 'success'
+                                    : payband.apportionRate >= 0.6
+                                    ? 'warning'
+                                    : 'error'
+                                }
+                                variant='outlined'
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Chip
+                                label={`Clawback: ${payband.clawbackPercentage}%`}
+                                size='small'
+                                color={
+                                  payband.clawbackPercentage <= 20
+                                    ? 'success'
+                                    : payband.clawbackPercentage <= 60
+                                    ? 'warning'
+                                    : 'error'
+                                }
+                                variant='outlined'
+                              />
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Confirmation */}
+        <Grid item xs={12}>
+          <CardContent sx={{ py: 3 }}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={confirmed}
+                  onChange={e => handleConfirmationChange(e.target.checked)}
+                  color='success'
+                />
+              }
+              label={
+                <Typography variant='body1' sx={{ fontWeight: 500 }}>
+                  I have reviewed and confirmed all commission configuration details
+                </Typography>
+              }
+            />
+          </CardContent>
         </Grid>
       </Grid>
-    </Grid>
+    </Box>
   )
 }
 
