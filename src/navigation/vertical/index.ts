@@ -17,7 +17,7 @@ const navigation = (): VerticalNavItemsType => {
           title: 'RMS',
           path: '/dashboard/rms',
           action: 'read',
-          subject: 'analytics'
+          subject: 'regional-manager'
         },
         {
           title: 'Analyst',

@@ -35,5 +35,9 @@ const AgentPerformance = () => {
     </Grid>
   )
 }
+AgentPerformance.acl = {
+  action: 'read',
+  subject: 'agent-management'
+}
 
 export default AgentPerformance

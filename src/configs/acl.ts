@@ -42,6 +42,7 @@ const defineRulesFor = (role: string) => {
     case 'analyst':
       can('read', 'dashboard')
       can(['read', 'analyze'], 'analytics')
+      can('read', 'agent-management')
       can(['read', 'export'], 'reports')
       can('read', 'commissions')
       can('read', 'transactions')
@@ -50,15 +51,12 @@ const defineRulesFor = (role: string) => {
       can('read', 'faq')
       can('read', 'help-center')
       can('read', 'calendar')
-      cannot('manage', 'agent-management')
       cannot('manage', 'customers')
       break
 
     case 'super_agent':
       can('read', 'super_agent')
       can('read', 'dashboard')
-      can(['read', 'update'], 'agent-management')
-      can('read', 'commissions')
       can('read', 'faq')
       can('read', 'help-center')
       can('read', 'calendar')
@@ -69,8 +67,6 @@ const defineRulesFor = (role: string) => {
     case 'franchise':
       can('read', 'franchise')
       can('read', 'dashboard')
-      can(['read', 'update'], 'agent-management')
-      can('read', 'commissions')
       can('read', 'customers')
       can('read', 'faq')
       can('read', 'help-center')

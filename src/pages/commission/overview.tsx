@@ -185,7 +185,7 @@ const CommissionOverview = () => {
       case 'super_agent':
         return 'primary' as const
       case 'franchise':
-        return 'secondary' as const
+        return 'info' as const
       default:
         return 'default' as const
     }
@@ -465,4 +465,5 @@ const CommissionOverview = () => {
   )
 }
 
+CommissionOverview.acl = { action: 'read', subject: 'commissions' }
 export default CommissionOverview

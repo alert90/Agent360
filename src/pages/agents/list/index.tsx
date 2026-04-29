@@ -447,4 +447,9 @@ const AgentList = () => {
   )
 }
 
+AgentList.acl = {
+  action: 'read',
+  subject: 'agent-management'
+}
+
 export default AgentList
