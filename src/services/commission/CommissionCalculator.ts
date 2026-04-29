@@ -87,22 +87,8 @@ export class CommissionCalculator {
                 }
               }
             } else if (agent.type === 'franchise') {
-              // Get capital advanced for this franchise
-              const capitalAdvancedRecord = await prisma.capitalAdvanced.findFirst({
-                where: {
-                  franchiseId: agent.id,
-                  period
-                }
-              })
-              const capitalAdvanced = capitalAdvancedRecord?.amount || 1000000
-
               // Use FranchiseCommission class for franchises
-              const franchiseResult = await this.franchiseCalc.calculate(
-                agent.id,
-                period,
-                activeConfig,
-                capitalAdvanced
-              )
+              const franchiseResult = await this.franchiseCalc.calculate(agent.id, period, activeConfig)
               if (franchiseResult) {
                 result = {
                   agentId: franchiseResult.agentId,
@@ -295,15 +281,7 @@ export class CommissionCalculator {
         }
       }
     } else if (agent.type === 'franchise') {
-      const capitalAdvancedRecord = await prisma.capitalAdvanced.findFirst({
-        where: {
-          franchiseId: agent.id,
-          period
-        }
-      })
-      const capitalAdvanced = capitalAdvancedRecord?.amount || 1000000
-
-      const franchiseResult = await this.franchiseCalc.calculate(agent.id, period, activeConfig, capitalAdvanced)
+      const franchiseResult = await this.franchiseCalc.calculate(agent.id, period, activeConfig)
       if (franchiseResult) {
         result = {
           agentId: franchiseResult.agentId,

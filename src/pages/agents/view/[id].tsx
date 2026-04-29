@@ -132,6 +132,9 @@ const AgentView = () => {
   const [transactionPage, setTransactionPage] = useState(0)
   const [transactionRowsPerPage, setTransactionRowsPerPage] = useState(25)
   const [assigningAgent, setAssigningAgent] = useState<string | null>(null)
+  const [qualifyingSearchTerm, setQualifyingSearchTerm] = useState('')
+  const [qualifyingPage, setQualifyingPage] = useState(1)
+  const [qualifyingRowsPerPage, setQualifyingRowsPerPage] = useState(25)
   const [commissionData, setCommissionData] = useState<any[]>([])
   const [commissionLoading, setCommissionLoading] = useState(false)
   const [commissionSearchTerm, setCommissionSearchTerm] = useState('')
@@ -151,6 +154,7 @@ const AgentView = () => {
   const [transactionAgentSearchTerm, setTransactionAgentSearchTerm] = useState('')
   const [transactionAgentPage, setTransactionAgentPage] = useState(1)
   const [transactionAgentRowsPerPage, setTransactionAgentRowsPerPage] = useState(25)
+  const [activeCommissionConfig, setActiveCommissionConfig] = useState<any>(null)
 
   // Dialog states
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
@@ -177,7 +181,8 @@ const AgentView = () => {
   const shouldShowAgentsTab = (): boolean => {
     if (!agent) return false
     if (agent.type === 'super_agent' || agent.type === 'franchise') return true
-    if (transactionAgentsMeta && transactionAgentsMeta.total_detected > 0) return true
+
+    // if (transactionAgentsMeta && transactionAgentsMeta.total_detected > 0) return true
 
     return false
   }
@@ -325,26 +330,66 @@ const AgentView = () => {
     return filteredTransactions.slice(start, end)
   }, [filteredTransactions, transactionPage, transactionRowsPerPage])
 
-  const fetchTransactionAgents = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/agents/${id}/transaction-agents`)
-      if (response.ok) {
-        const result = await response.json()
-        if (result.success) {
-          setTransactionAgents(result.data)
-          setTransactionAgentsMeta(result.meta)
+  const fetchTransactionAgents = useCallback(
+    async (period?: string) => {
+      try {
+        const url = period
+          ? `/api/agents/${id}/transaction-agents?period=${period}`
+          : `/api/agents/${id}/transaction-agents`
+
+        const response = await fetch(url)
+        if (response.ok) {
+          const result = await response.json()
+          if (result.success) {
+            setTransactionAgents(result.data)
+            setTransactionAgentsMeta(result.meta)
+          }
         }
+      } catch (error) {
+        console.error('Error fetching transaction agents:', error)
       }
-    } catch (error) {
-      console.error('Error fetching transaction agents:', error)
-    }
-  }, [id])
+    },
+    [id]
+  )
 
   const calculateCommissions = useCallback(async () => {
-    const agentsToCalculate = transactionAgents.filter(a => a.id !== null)
+    if (!agent || transactionAgents.length === 0) {
+      setCommissionData([])
 
-    if (!agent || agentsToCalculate.length === 0) {
-      console.log('No agents to calculate commissions for')
+      return
+    }
+
+    const trxMap = new Map<string, any>()
+
+    transactionAgents.forEach(a => {
+      if (a.id !== null) {
+        trxMap.set(a.account_number, {
+          id: a.id,
+          name: a.name,
+          account_number: a.account_number,
+          transaction_count: a.transaction_count || 0,
+          total_amount: a.total_amount || 0,
+          is_assigned: a.is_assigned || false,
+          source: 'detected'
+        })
+      }
+    })
+
+    associatedAgents.forEach(a => {
+      trxMap.set(a.account_number, {
+        id: a.id,
+        name: a.name,
+        account_number: a.account_number,
+        transaction_count: a.total_transactions || 0,
+        total_amount: a.total_amount || 0,
+        is_assigned: true,
+        source: 'assigned'
+      })
+    })
+
+    const allAgents = Array.from(trxMap.values())
+
+    if (allAgents.length === 0) {
       setCommissionData([])
 
       return
@@ -352,193 +397,224 @@ const AgentView = () => {
 
     setCommissionLoading(true)
     try {
-      const response = await fetch('/api/commissions/config')
-      if (!response.ok) throw new Error('Failed to fetch commission config')
+      const configRes = await fetch('/api/commissions/config')
+      if (!configRes.ok) throw new Error('Failed to fetch configs')
+      const configs = await configRes.json()
 
-      const configs = await response.json()
       const activeConfig = configs.find(
         (c: any) => c.type === (agent.type === 'super_agent' ? 'SUPER_AGENT' : 'FRANCHISE') && c.status === 'active'
       )
 
       if (!activeConfig) {
-        console.log('No active commission config found')
+        console.log('No active config found')
         setCommissionData([])
         setCommissionLoading(false)
 
         return
       }
 
-      console.log(`Using config: ${activeConfig.title} for ${agentsToCalculate.length} agents`)
+      setActiveCommissionConfig(activeConfig)
 
-      const [year, month] = selectedCommissionPeriod.split('-')
-      const startDate = new Date(parseInt(year), parseInt(month) - 1, 1)
-      const endDate = new Date(parseInt(year), parseInt(month), 0, 23, 59, 59, 999)
+      console.log(`Using config: ${activeConfig.title}`)
 
-      // Process in batches of 50 for better performance
-      const BATCH_SIZE = 50
-      const allResults: any[] = []
+      if (agent.type === 'super_agent') {
+        const minThreshold = activeConfig.minTransactionAmount || 100000
 
-      for (let i = 0; i < agentsToCalculate.length; i += BATCH_SIZE) {
-        const batch = agentsToCalculate.slice(i, i + BATCH_SIZE)
+        const baseQualifyingAgents = allAgents.filter(a => a.id !== null && a.total_amount >= minThreshold)
+        const BATCH = 20
 
-        const batchResults = await Promise.all(
-          batch.map(async txAgent => {
-            const totalAgentTransactions = txAgent.total_amount || 0
-            const transactionCount = txAgent.transaction_count || 0
+        const qualifyingWithTurnover: any[] = []
 
-            if (agent.type === 'super_agent') {
-              // Super Agent Commission Calculation
-              const kpiWeights = activeConfig.kpiWeights
-                ? typeof activeConfig.kpiWeights === 'string'
-                  ? JSON.parse(activeConfig.kpiWeights)
-                  : activeConfig.kpiWeights
-                : { activeness: 55, valueTransacted: 20, uniqueAgents: 25 }
-
-              const kpiBands = activeConfig.paybandRates
-                ? typeof activeConfig.paybandRates === 'string'
-                  ? JSON.parse(activeConfig.paybandRates)
-                  : activeConfig.paybandRates
-                : [
-                    { min: 0, max: 50, rate: 0 },
-                    { min: 51, max: 60, rate: 20 },
-                    { min: 61, max: 70, rate: 40 },
-                    { min: 71, max: 80, rate: 60 },
-                    { min: 81, max: 90, rate: 80 },
-                    { min: 91, max: 100, rate: 100 }
-                  ]
-
-              const minThreshold = activeConfig.minTransactionAmount || 100000
-              const minThresholdMet = totalAgentTransactions >= minThreshold
-              const activenessScore = minThresholdMet ? 100 : 0
-              const valueScore = Math.min((totalAgentTransactions / 100000000) * 100, 100)
-              const uniqueScore = transactionCount > 0 ? 100 : 0
-
-              const totalKPIScore =
-                (activenessScore * kpiWeights.activeness) / 100 +
-                (valueScore * kpiWeights.valueTransacted) / 100 +
-                (uniqueScore * kpiWeights.uniqueAgents) / 100
-
-              const applicableBand = kpiBands.find((b: any) => totalKPIScore >= b.min && totalKPIScore <= b.max) || {
-                rate: 0
-              }
-
-              const baseCommission = totalAgentTransactions * (activeConfig.commissionRate || 0.05)
-              const saRate = activeConfig.superAgentCommissionRate || 0.2
-              const eligibleSACommission = baseCommission * saRate
-              const fixedPortion = eligibleSACommission * (activeConfig.superAgentFixedRate || 0.3)
-              const variablePortion =
-                eligibleSACommission * (activeConfig.superAgentVariableRate || 0.7) * (applicableBand.rate / 100)
-              const finalCommission = fixedPortion + variablePortion
-
-              return {
-                agentId: txAgent.id,
-                agentName: txAgent.name,
-                accountNumber: txAgent.account_number,
-                totalTransactions: totalAgentTransactions,
-                transactionCount,
-                isEligible: minThresholdMet,
-                kpiScore: totalKPIScore,
-                kpiBand: applicableBand.rate,
-                baseCommission,
-                fixedPortion,
-                variablePortion,
-                finalCommission,
-                performance: `${totalKPIScore.toFixed(1)}%`
-              }
-            } else {
-              // Franchise Commission Calculation
-              const multiplier = activeConfig.franchiseMultiplier || 4.5
-              const baseRate = activeConfig.franchiseBaseRate || 0.0005
-              const capitalAdvanced = totalAgentTransactions
-
-              let actualTurnover = totalAgentTransactions
+        for (let i = 0; i < baseQualifyingAgents.length; i += BATCH) {
+          const batch = baseQualifyingAgents.slice(i, i + BATCH)
+          const batchResults = await Promise.all(
+            batch.map(async agent => {
+              let agentTurnover = agent.total_amount || 0 // fallback to capital advanced
               try {
-                const agentTxResponse = await fetch(`/api/agents/${txAgent.id}/transactions?page=1&limit=10000`)
-                if (agentTxResponse.ok) {
-                  const agentTxData = await agentTxResponse.json()
-                  if (agentTxData.success && agentTxData.data) {
-                    actualTurnover = agentTxData.data
-                      .filter((t: any) => {
-                        const txDate = new Date(t.timestamp || t.createdAt)
-
-                        return txDate >= startDate && txDate <= endDate
-                      })
-                      .reduce((sum: number, t: any) => sum + (t.amount || 0), 0)
+                const txRes = await fetch(`/api/agents/${agent.id}/transactions?page=1&limit=10000`)
+                if (txRes.ok) {
+                  const txData = await txRes.json()
+                  console.log(`Agent ${agent.id} turnover:`, txData.summary?.totalAmount)
+                  if (txData.success && txData.summary) {
+                    agentTurnover = txData.summary.totalAmount || agent.total_amount || 0
                   }
                 }
               } catch (e) {
-                console.log(`Could not fetch transactions for agent ${txAgent.id}, using detected amount`)
+                console.log(`Could not fetch turnover for agent ${agent.id}`)
               }
-
-              const expectedTurnover = capitalAdvanced * multiplier
-              const performancePct = expectedTurnover > 0 ? Math.min((actualTurnover / expectedTurnover) * 100, 100) : 0
-
-              const paybands = activeConfig.paybandRates
-                ? typeof activeConfig.paybandRates === 'string'
-                  ? JSON.parse(activeConfig.paybandRates)
-                  : activeConfig.paybandRates
-                : [
-                    { min: 100, max: Infinity, name: 'Excellent', apportionRate: 1.0, clawbackPercentage: 0 },
-                    { min: 80, max: 99, name: 'Good', apportionRate: 0.8, clawbackPercentage: 20 },
-                    { min: 60, max: 79, name: 'Average', apportionRate: 0.6, clawbackPercentage: 40 },
-                    { min: 40, max: 59, name: 'Below Average', apportionRate: 0.4, clawbackPercentage: 60 },
-                    { min: 0, max: 39, name: 'Poor', apportionRate: 0.2, clawbackPercentage: 80 }
-                  ]
-
-              const applicablePayband =
-                paybands.find((b: any) => {
-                  const perfRounded = Math.floor(performancePct)
-                  if (b.max === Infinity || b.max === null) {
-                    return perfRounded >= b.min
-                  }
-
-                  return perfRounded >= b.min && perfRounded <= b.max
-                }) || paybands[paybands.length - 1]
-
-              const baseCommission = actualTurnover * baseRate
-              const finalCommission = baseCommission * applicablePayband.apportionRate
-              const clawback = baseCommission * (applicablePayband.clawbackPercentage / 100)
 
               return {
-                agentId: txAgent.id,
-                agentName: txAgent.name,
-                accountNumber: txAgent.account_number,
-                totalTransactions: actualTurnover,
-                transactionCount,
-                capitalAdvanced,
-                expectedTurnover,
-                actualTurnover,
-                performancePct,
-                payband: applicablePayband.name,
-                apportionRate: applicablePayband.apportionRate,
-                baseCommission,
-                finalCommission,
-                clawback,
-                performance: `${performancePct.toFixed(1)}%`
+                ...agent,
+                agent_turnover: agentTurnover
+              }
+            })
+          )
+          qualifyingWithTurnover.push(...batchResults)
+
+          if (baseQualifyingAgents.length > 50 && i % 40 === 0) {
+            console.log(
+              `Fetched turnover for ${qualifyingWithTurnover.length}/${baseQualifyingAgents.length} agents...`
+            )
+          }
+        }
+
+        const qualifyingAgents = qualifyingWithTurnover
+        const totalDetected = allAgents.filter(a => a.id !== null).length
+        const activeCount = qualifyingAgents.length
+        const totalValue = qualifyingAgents.reduce((sum, a) => sum + (a.total_amount || 0), 0)
+        const uniqueCount = new Set(qualifyingAgents.map(a => a.account_number)).size
+
+        const kpiWeights = activeConfig.kpiWeights
+          ? typeof activeConfig.kpiWeights === 'string'
+            ? JSON.parse(activeConfig.kpiWeights)
+            : activeConfig.kpiWeights
+          : { activeness: 55, valueTransacted: 20, uniqueAgents: 25 }
+
+        const kpiBands = activeConfig.paybandRates
+          ? typeof activeConfig.paybandRates === 'string'
+            ? JSON.parse(activeConfig.paybandRates)
+            : activeConfig.paybandRates
+          : [
+              { min: 0, max: 50, rate: 0 },
+              { min: 51, max: 60, rate: 20 },
+              { min: 61, max: 70, rate: 40 },
+              { min: 71, max: 80, rate: 60 },
+              { min: 81, max: 90, rate: 80 },
+              { min: 91, max: 100, rate: 100 }
+            ]
+
+        const activenessScore = totalDetected > 0 ? (activeCount / totalDetected) * 100 : 0
+        const monthlyTarget = 100000000
+        const valueScore = Math.min((totalValue / monthlyTarget) * 100, 100)
+        const uniqueScore = totalDetected > 0 ? (uniqueCount / totalDetected) * 100 : 0
+
+        const totalKPIScore =
+          (activenessScore * kpiWeights.activeness +
+            valueScore * kpiWeights.valueTransacted +
+            uniqueScore * kpiWeights.uniqueAgents) /
+          100
+        const applicableBand = kpiBands.find((b: any) => totalKPIScore >= b.min && totalKPIScore <= b.max) || {
+          rate: 0
+        }
+
+        const baseRate = activeConfig.commissionRate || 0.0005
+        const totalAgentCommissions = totalValue * baseRate
+        const saRate = activeConfig.superAgentCommissionRate || 0.2
+        const eligibleSACommission = totalAgentCommissions * saRate
+        const fixedRate = activeConfig.superAgentFixedRate || 0.3
+        const variableRate = activeConfig.superAgentVariableRate || 0.7
+        const fixedCommission = eligibleSACommission * fixedRate
+        const variableCommission = eligibleSACommission * variableRate * (applicableBand.rate / 100)
+        const finalCommission = fixedCommission + variableCommission
+
+        setCommissionData([
+          {
+            agentName: agent.name,
+            accountNumber: agent.accountNumber,
+            totalDetected,
+            activeCount,
+            totalValue,
+            totalAgentCommissions,
+            eligibleSACommission,
+            fixedCommission,
+            variableCommission,
+            finalCommission,
+            kpiScore: totalKPIScore,
+            kpiBand: applicableBand.rate,
+            kpiDetails: {
+              totalAgents: totalDetected,
+              activeAgents: activeCount,
+              activenessScore: Math.round(activenessScore * 100) / 100,
+              valueTransactedScore: Math.round(valueScore * 100) / 100,
+              uniqueAgentsScore: Math.round(uniqueScore * 100) / 100,
+              totalScore: Math.round(totalKPIScore * 100) / 100,
+              kpiBand: applicableBand.rate,
+              fixedCommission,
+              variableCommission
+            },
+            qualifyingAgents
+          }
+        ])
+      } else {
+        // Franchise - per agent calculation
+        const agentsToCalc = transactionAgents.filter(a => a.id !== null)
+        const [year, month] = selectedCommissionPeriod.split('-')
+        const startDate = new Date(parseInt(year), parseInt(month) - 1, 1)
+        const endDate = new Date(parseInt(year), parseInt(month), 0, 23, 59, 59, 999)
+
+        const multiplier = activeConfig.franchiseMultiplier || 4.5
+        const baseRate = activeConfig.franchiseBaseRate || 0.0005
+
+        const paybands = activeConfig.paybandRates
+          ? typeof activeConfig.paybandRates === 'string'
+            ? JSON.parse(activeConfig.paybandRates)
+            : activeConfig.paybandRates
+          : [
+              { min: 100, max: Infinity, name: 'Excellent', apportionRate: 1.0, clawbackPercentage: 0 },
+              { min: 80, max: 99, name: 'Good', apportionRate: 0.8, clawbackPercentage: 20 },
+              { min: 60, max: 79, name: 'Average', apportionRate: 0.6, clawbackPercentage: 40 },
+              { min: 40, max: 59, name: 'Below Average', apportionRate: 0.4, clawbackPercentage: 60 },
+              { min: 0, max: 39, name: 'Poor', apportionRate: 0.2, clawbackPercentage: 80 }
+            ]
+
+        const allResults: any[] = []
+        for (const txAgent of agentsToCalc) {
+          const capitalAdvanced = txAgent.total_amount || 0
+          let actualTurnover = capitalAdvanced
+          try {
+            const txRes = await fetch(`/api/agents/${txAgent.id}/transactions?page=1&limit=10000`)
+            if (txRes.ok) {
+              const txData = await txRes.json()
+              console.log(`Agent ${agent.id} turnover:`, txData.summary?.totalAmount)
+              if (txData.success && txData.data) {
+                actualTurnover = txData.data
+                  .filter((t: any) => {
+                    const d = new Date(t.timestamp || t.createdAt)
+
+                    return d >= startDate && d <= endDate
+                  })
+                  .reduce((s: number, t: any) => s + (t.amount || 0), 0)
               }
             }
+          } catch (e) {}
+
+          const expectedTurnover = capitalAdvanced * multiplier
+          const performancePct = expectedTurnover > 0 ? Math.min((actualTurnover / expectedTurnover) * 100, 100) : 0
+          const pr = Math.floor(performancePct)
+          const pb =
+            paybands.find((b: any) => pr >= b.min && (b.max === Infinity || b.max === null || pr <= b.max)) ||
+            paybands[paybands.length - 1]
+          const baseCommission = actualTurnover * baseRate
+          const fc = baseCommission * pb.apportionRate
+          const clawback = baseCommission * (pb.clawbackPercentage / 100)
+
+          allResults.push({
+            agentId: txAgent.id,
+            agentName: txAgent.name,
+            accountNumber: txAgent.account_number,
+            totalTransactions: actualTurnover,
+            transactionCount: txAgent.transaction_count || 0,
+            capitalAdvanced,
+            expectedTurnover,
+            actualTurnover,
+            performancePct,
+            payband: pb.name,
+            apportionRate: pb.apportionRate,
+            baseCommission,
+            finalCommission: fc,
+            clawback,
+            performance: `${performancePct.toFixed(1)}%`
           })
-        )
-
-        allResults.push(...batchResults)
-
-        // Update progress incrementally for large datasets
-        if (agentsToCalculate.length > 100) {
-          setCommissionData([...allResults])
         }
+        setCommissionData(allResults)
       }
-
-      // Filter out any null/undefined results
-      const validResults = allResults.filter(r => r !== null && r !== undefined)
-      setCommissionData(validResults)
-      console.log(`Calculated commissions for ${validResults.length} agents`)
     } catch (error) {
-      console.error('Error calculating commissions:', error)
+      console.error('Error:', error)
       setCommissionData([])
     } finally {
       setCommissionLoading(false)
     }
-  }, [agent, transactionAgents, selectedCommissionPeriod])
+  }, [agent, transactionAgents, associatedAgents, selectedCommissionPeriod])
 
   const filteredCommissionData = useMemo(() => {
     let filtered = commissionData
@@ -1668,66 +1744,32 @@ const AgentView = () => {
           </Card>
         </TabPanel>
         {/* Commission Tab */}
+        {/* Commission Tab */}
         {shouldShowAgentsTab() && (
           <TabPanel value='commission'>
             <Card sx={{ mb: 4 }}>
               <CardHeader
                 title={`${agent?.type === 'super_agent' ? 'Super Agent' : 'Franchise'} Commission`}
-                subheader={`Calculated for ${transactionAgents.filter(a => a.id !== null).length} detected agents`}
+                subheader={
+                  agent?.type === 'super_agent'
+                    ? `Based on ${transactionAgents.filter(a => a.id !== null).length} detected agents`
+                    : `Calculated for ${transactionAgents.filter(a => a.id !== null).length} detected agents`
+                }
               />
               <CardContent>
-                {/* Period Selector & Controls */}
+                {/* Period Selector */}
                 <Grid container spacing={3} sx={{ mb: 4 }}>
                   <Grid item xs={12} md={3}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                      <FormControl size='small' sx={{ minWidth: 180 }}>
-                        <Select
-                          value={selectedCommissionPeriod}
-                          onChange={e => setSelectedCommissionPeriod(e.target.value)}
-                        >
-                          {getCommissionPeriodOptions().map(option => (
-                            <MenuItem key={option.value} value={option.value}>
-                              {option.label}
-                            </MenuItem>
-                          ))}
-                        </Select>
-                      </FormControl>
-                    </Box>
-                  </Grid>
-                  <Grid item xs={12} md={4}>
-                    <TextField
-                      fullWidth
-                      size='small'
-                      placeholder='Search by agent name or account number...'
-                      value={commissionSearchTerm}
-                      onChange={e => {
-                        setCommissionSearchTerm(e.target.value)
-                        setCommissionPage(1)
-                      }}
-                      InputProps={{
-                        startAdornment: (
-                          <InputAdornment position='start'>
-                            <Icon icon='tabler:search' />
-                          </InputAdornment>
-                        )
-                      }}
-                    />
-                  </Grid>
-                  <Grid item xs={12} md={3}>
-                    <FormControl fullWidth size='small'>
-                      <InputLabel>Rows per page</InputLabel>
+                    <FormControl size='small' sx={{ minWidth: 180 }}>
                       <Select
-                        value={commissionRowsPerPage}
-                        label='Rows per page'
-                        onChange={e => {
-                          setCommissionRowsPerPage(Number(e.target.value))
-                          setCommissionPage(1)
-                        }}
+                        value={selectedCommissionPeriod}
+                        onChange={e => setSelectedCommissionPeriod(e.target.value)}
                       >
-                        <MenuItem value={25}>25</MenuItem>
-                        <MenuItem value={50}>50</MenuItem>
-                        <MenuItem value={100}>100</MenuItem>
-                        <MenuItem value={250}>250</MenuItem>
+                        {getCommissionPeriodOptions().map(option => (
+                          <MenuItem key={option.value} value={option.value}>
+                            {option.label}
+                          </MenuItem>
+                        ))}
                       </Select>
                     </FormControl>
                   </Grid>
@@ -1744,205 +1786,791 @@ const AgentView = () => {
                   </Grid>
                 </Grid>
 
-                {/* Summary Cards */}
-                {commissionData.length > 0 && (
-                  <Grid container spacing={3} sx={{ mb: 4 }}>
-                    <Grid item xs={6} md={3}>
-                      <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
-                        <Icon icon='tabler:users' fontSize='1.5rem' color='primary' />
-                        <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
-                          {commissionData.length}
-                        </Typography>
-                        <Typography variant='caption' color='text.secondary'>
-                          Agents Served
-                        </Typography>
-                      </Card>
-                    </Grid>
-                    <Grid item xs={6} md={3}>
-                      <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
-                        <Icon icon='tabler:currency-dollar' fontSize='1.5rem' color='success' />
-                        <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
-                          TZS {commissionData.reduce((sum, c) => sum + (c.finalCommission || 0), 0).toLocaleString()}
-                        </Typography>
-                        <Typography variant='caption' color='text.secondary'>
-                          Total Commission
-                        </Typography>
-                      </Card>
-                    </Grid>
-                    <Grid item xs={6} md={3}>
-                      <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
-                        <Icon icon='tabler:exchange' fontSize='1.5rem' color='warning' />
-                        <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
-                          {commissionData.reduce((sum, c) => sum + (c.transactionCount || 0), 0).toLocaleString()}
-                        </Typography>
-                        <Typography variant='caption' color='text.secondary'>
-                          Total Transactions
-                        </Typography>
-                      </Card>
-                    </Grid>
-                    <Grid item xs={6} md={3}>
-                      <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
-                        <Icon icon='tabler:chart-bar' fontSize='1.5rem' color='info' />
-                        <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
-                          TZS{' '}
-                          {(commissionData.length > 0
-                            ? commissionData.reduce((sum, c) => sum + (c.finalCommission || 0), 0) /
-                              commissionData.length
-                            : 0
-                          ).toLocaleString()}
-                        </Typography>
-                        <Typography variant='caption' color='text.secondary'>
-                          Avg Commission
-                        </Typography>
-                      </Card>
-                    </Grid>
-                  </Grid>
-                )}
-
-                {/* Commission Table */}
                 {commissionLoading ? (
                   <Box sx={{ textAlign: 'center', py: 6 }}>
                     <CircularProgress />
-                    <Typography variant='body2' sx={{ mt: 2, color: 'text.secondary' }}>
-                      Calculating commissions for {transactionAgents.filter(a => a.id !== null).length} agents...
+                    <Typography variant='body2' sx={{ mt: 2 }}>
+                      Calculating commissions...
                     </Typography>
                   </Box>
                 ) : commissionData.length > 0 ? (
-                  <>
-                    <TableContainer component={Paper}>
-                      <Table size='small'>
-                        <TableHead>
-                          <TableRow>
-                            <TableCell sx={{ fontWeight: 600 }}>Agent</TableCell>
-                            {agent?.type === 'franchise' && (
+                  agent?.type === 'super_agent' ? (
+                    (() => {
+                      const d = commissionData[0]
+                      const kpi = d.kpiDetails
+                      if (!kpi) return null
+                      const perfLabel = getSuperAgentPerformanceLabel(kpi.totalScore)
+
+                      // Prepare qualifying agents for table display
+                      const qualifyingAgentsList = d.qualifyingAgents || []
+
+                      return (
+                        <>
+                          {/* KPI Overview Cards */}
+                          <Grid container spacing={3} sx={{ mb: 4 }}>
+                            <Grid item xs={6} md={3}>
+                              <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                                <Icon icon='tabler:users' fontSize='1.5rem' color='primary' />
+                                <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
+                                  {kpi.totalAgents}
+                                </Typography>
+                                <Typography variant='caption'>Total Detected Agents</Typography>
+                              </Card>
+                            </Grid>
+                            <Grid item xs={6} md={3}>
+                              <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                                <Icon icon='tabler:user-check' fontSize='1.5rem' color='success' />
+                                <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
+                                  {kpi.activeAgents}
+                                </Typography>
+                                <Typography variant='caption'>
+                                  Qualifying (≥
+                                  {activeCommissionConfig?.minTransactionAmount?.toLocaleString() || '100,000'} TZS)
+                                </Typography>
+                              </Card>
+                            </Grid>
+                            <Grid item xs={6} md={3}>
+                              <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                                <Icon icon='tabler:chart-bar' fontSize='1.5rem' color='info' />
+                                <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
+                                  {kpi.totalScore?.toFixed(1)}%
+                                </Typography>
+                                <Chip
+                                  label={perfLabel.label}
+                                  size='small'
+                                  color={perfLabel.color}
+                                  variant='outlined'
+                                  sx={{ mt: 0.5 }}
+                                />
+                              </Card>
+                            </Grid>
+                            <Grid item xs={6} md={3}>
+                              <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                                <Icon icon='tabler:currency-dollar' fontSize='1.5rem' color='success' />
+                                <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
+                                  TZS {d.finalCommission?.toLocaleString()}
+                                </Typography>
+                                <Typography variant='caption'>Final Commission</Typography>
+                              </Card>
+                            </Grid>
+                          </Grid>
+
+                          {/* KPI Breakdown */}
+                          {/* KPI Breakdown with Circular Progress */}
+                          <Typography variant='h6' sx={{ mb: 2 }}>
+                            KPI Breakdown
+                          </Typography>
+                          <Grid container spacing={3} sx={{ mb: 4 }}>
+                            <Grid item xs={12} md={4}>
+                              <Card variant='outlined' sx={{ textAlign: 'center', p: 3 }}>
+                                <Typography variant='caption' color='text.secondary' sx={{ mb: 2, display: 'block' }}>
+                                  Agent Activeness (55%)
+                                </Typography>
+                                <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+                                  <Box sx={{ position: 'relative', display: 'inline-flex' }}>
+                                    <CircularProgress
+                                      variant='determinate'
+                                      value={100}
+                                      size={80}
+                                      thickness={5}
+                                      sx={{ color: 'action.hover' }}
+                                    />
+                                    <CircularProgress
+                                      variant='determinate'
+                                      value={kpi.activenessScore}
+                                      size={80}
+                                      thickness={5}
+                                      color='primary'
+                                      sx={{ position: 'absolute', left: 0 }}
+                                    />
+                                    <Box
+                                      sx={{
+                                        position: 'absolute',
+                                        top: 0,
+                                        left: 0,
+                                        bottom: 0,
+                                        right: 0,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                      }}
+                                    >
+                                      <Typography variant='body2' fontWeight='bold' color='text.primary'>
+                                        {kpi.activenessScore.toFixed(1)}%
+                                      </Typography>
+                                    </Box>
+                                  </Box>
+                                </Box>
+                                <Typography variant='caption' color='text.secondary' sx={{ mt: 1, display: 'block' }}>
+                                  {kpi.activeAgents} of {kpi.totalAgents} agents qualified
+                                </Typography>
+                              </Card>
+                            </Grid>
+                            <Grid item xs={12} md={4}>
+                              <Card variant='outlined' sx={{ textAlign: 'center', p: 3 }}>
+                                <Typography variant='caption' color='text.secondary' sx={{ mb: 2, display: 'block' }}>
+                                  Value Transacted (20%)
+                                </Typography>
+                                <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+                                  <Box sx={{ position: 'relative', display: 'inline-flex' }}>
+                                    <CircularProgress
+                                      variant='determinate'
+                                      value={100}
+                                      size={80}
+                                      thickness={5}
+                                      sx={{ color: 'action.hover' }}
+                                    />
+                                    <CircularProgress
+                                      variant='determinate'
+                                      value={kpi.valueTransactedScore}
+                                      size={80}
+                                      thickness={5}
+                                      color='success'
+                                      sx={{ position: 'absolute', left: 0 }}
+                                    />
+                                    <Box
+                                      sx={{
+                                        position: 'absolute',
+                                        top: 0,
+                                        left: 0,
+                                        bottom: 0,
+                                        right: 0,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                      }}
+                                    >
+                                      <Typography variant='body2' fontWeight='bold'>
+                                        {kpi.valueTransactedScore.toFixed(1)}%
+                                      </Typography>
+                                    </Box>
+                                  </Box>
+                                </Box>
+                                <Typography variant='caption' color='text.secondary' sx={{ mt: 1, display: 'block' }}>
+                                  TZS {d.totalValue?.toLocaleString()} transacted
+                                </Typography>
+                              </Card>
+                            </Grid>
+                            <Grid item xs={12} md={4}>
+                              <Card variant='outlined' sx={{ textAlign: 'center', p: 3 }}>
+                                <Typography variant='caption' color='text.secondary' sx={{ mb: 2, display: 'block' }}>
+                                  Unique Agents (25%)
+                                </Typography>
+                                <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+                                  <Box sx={{ position: 'relative', display: 'inline-flex' }}>
+                                    <CircularProgress
+                                      variant='determinate'
+                                      value={100}
+                                      size={80}
+                                      thickness={5}
+                                      sx={{ color: 'action.hover' }}
+                                    />
+                                    <CircularProgress
+                                      variant='determinate'
+                                      value={kpi.uniqueAgentsScore}
+                                      size={80}
+                                      thickness={5}
+                                      color='warning'
+                                      sx={{ position: 'absolute', left: 0 }}
+                                    />
+                                    <Box
+                                      sx={{
+                                        position: 'absolute',
+                                        top: 0,
+                                        left: 0,
+                                        bottom: 0,
+                                        right: 0,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                      }}
+                                    >
+                                      <Typography variant='body2' fontWeight='bold'>
+                                        {kpi.uniqueAgentsScore.toFixed(1)}%
+                                      </Typography>
+                                    </Box>
+                                  </Box>
+                                </Box>
+                                <Typography variant='caption' color='text.secondary' sx={{ mt: 1, display: 'block' }}>
+                                  {new Set(qualifyingAgentsList.map((a: any) => a.account_number)).size} unique agents
+                                </Typography>
+                              </Card>
+                            </Grid>
+                          </Grid>
+                          {/* Commission Split */}
+                          <Typography variant='h6' sx={{ mb: 2 }}>
+                            Commission Calculation
+                          </Typography>
+                          <Grid container spacing={3} sx={{ mb: 4 }}>
+                            <Grid item xs={6} md={3}>
+                              <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                                <Typography variant='caption' color='text.secondary'>
+                                  Total Agent Commissions
+                                </Typography>
+                                <Typography variant='h6'>TZS {d.totalAgentCommissions?.toLocaleString()}</Typography>
+                                <Typography variant='caption' color='text.secondary' display='block'>
+                                  ({((activeCommissionConfig?.commissionRate || 0.05) * 100).toFixed(1)}% of
+                                  transactions)
+                                </Typography>
+                              </Card>
+                            </Grid>
+                            <Grid item xs={6} md={3}>
+                              <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                                <Typography variant='caption' color='text.secondary'>
+                                  Eligible SA Commission
+                                </Typography>
+                                <Typography variant='h6'>TZS {d.eligibleSACommission?.toLocaleString()}</Typography>
+                                <Typography variant='caption' color='text.secondary' display='block'>
+                                  ({((activeCommissionConfig?.superAgentCommissionRate || 0.2) * 100).toFixed(1)}% of
+                                  total)
+                                </Typography>
+                              </Card>
+                            </Grid>
+                            <Grid item xs={6} md={3}>
+                              <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                                <Typography variant='caption' color='text.secondary'>
+                                  Fixed (30%)
+                                </Typography>
+                                <Typography variant='h6' color='info.main'>
+                                  TZS {kpi.fixedCommission?.toLocaleString()}
+                                </Typography>
+                              </Card>
+                            </Grid>
+                            <Grid item xs={6} md={3}>
+                              <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                                <Typography variant='caption' color='text.secondary'>
+                                  Variable (70% × {kpi.kpiBand}%)
+                                </Typography>
+                                <Typography variant='h6' color='warning.main'>
+                                  TZS {kpi.variableCommission?.toLocaleString()}
+                                </Typography>
+                              </Card>
+                            </Grid>
+                          </Grid>
+
+                          {/* Qualifying Agents Table with Search, Pagination, and Agent Transactions */}
+                          <Card sx={{ mt: 4 }}>
+                            <CardHeader
+                              title={`Qualifying Agents (${qualifyingAgentsList.length})`}
+                              subheader={`Agents meeting ≥ ${(
+                                activeCommissionConfig?.minTransactionAmount || 100000
+                              ).toLocaleString()} TZS threshold`}
+                              titleTypographyProps={{ variant: 'h6' }}
+                            />
+                            <CardContent>
+                              {qualifyingAgentsList.length > 0 ? (
+                                <>
+                                  {/* Search and Rows per page */}
+                                  <Grid container spacing={2} sx={{ mb: 3 }}>
+                                    <Grid item xs={12} md={6}>
+                                      <TextField
+                                        fullWidth
+                                        size='small'
+                                        placeholder='Search by agent name or account number...'
+                                        value={qualifyingSearchTerm}
+                                        onChange={e => {
+                                          setQualifyingSearchTerm(e.target.value)
+                                          setQualifyingPage(1)
+                                        }}
+                                        InputProps={{
+                                          startAdornment: (
+                                            <InputAdornment position='start'>
+                                              <Icon icon='tabler:search' />
+                                            </InputAdornment>
+                                          )
+                                        }}
+                                      />
+                                    </Grid>
+                                    <Grid item xs={12} md={3}>
+                                      <FormControl fullWidth size='small'>
+                                        <InputLabel>Rows per page</InputLabel>
+                                        <Select
+                                          value={qualifyingRowsPerPage}
+                                          label='Rows per page'
+                                          onChange={e => {
+                                            setQualifyingRowsPerPage(Number(e.target.value))
+                                            setQualifyingPage(1)
+                                          }}
+                                        >
+                                          <MenuItem value={25}>25</MenuItem>
+                                          <MenuItem value={50}>50</MenuItem>
+                                          <MenuItem value={100}>100</MenuItem>
+                                          <MenuItem value={250}>250</MenuItem>
+                                        </Select>
+                                      </FormControl>
+                                    </Grid>
+                                    <Grid item xs={12} md={3}>
+                                      <Typography variant='body2' color='text.secondary' sx={{ mt: 1 }}>
+                                        {(() => {
+                                          const filtered = qualifyingAgentsList.filter(
+                                            (a: any) =>
+                                              !qualifyingSearchTerm ||
+                                              a.name?.toLowerCase().includes(qualifyingSearchTerm.toLowerCase()) ||
+                                              a.account_number
+                                                ?.toLowerCase()
+                                                .includes(qualifyingSearchTerm.toLowerCase())
+                                          )
+
+                                          return `${filtered.length} agents found`
+                                        })()}
+                                      </Typography>
+                                    </Grid>
+                                  </Grid>
+
+                                  <TableContainer component={Paper}>
+                                    <Table size='small'>
+                                      <TableHead>
+                                        <TableRow>
+                                          <TableCell sx={{ fontWeight: 600 }}>Agent</TableCell>
+                                          <TableCell align='right' sx={{ fontWeight: 600 }}>
+                                            Capital Advanced
+                                          </TableCell>
+                                          <TableCell align='right' sx={{ fontWeight: 600 }}>
+                                            Transaction Count
+                                          </TableCell>
+                                          <TableCell align='right' sx={{ fontWeight: 600 }}>
+                                            Agent Transactions
+                                          </TableCell>
+                                          <TableCell align='right' sx={{ fontWeight: 600 }}>
+                                            Commission (
+                                            {activeCommissionConfig?.commissionRate
+                                              ? (activeCommissionConfig.commissionRate * 100).toFixed(2)
+                                              : '5.00'}
+                                            %)
+                                          </TableCell>
+                                          <TableCell align='right' sx={{ fontWeight: 600 }}>
+                                            SA Commission (
+                                            {activeCommissionConfig?.superAgentCommissionRate
+                                              ? (activeCommissionConfig.superAgentCommissionRate * 100).toFixed(1)
+                                              : '20.0'}
+                                            %)
+                                          </TableCell>
+                                          <TableCell>Status</TableCell>
+                                        </TableRow>
+                                      </TableHead>
+                                      <TableBody>
+                                        {(() => {
+                                          // Filter qualifying agents
+                                          const filtered = qualifyingAgentsList.filter(
+                                            (a: any) =>
+                                              !qualifyingSearchTerm ||
+                                              a.name?.toLowerCase().includes(qualifyingSearchTerm.toLowerCase()) ||
+                                              a.account_number
+                                                ?.toLowerCase()
+                                                .includes(qualifyingSearchTerm.toLowerCase())
+                                          )
+
+                                          // Paginate
+                                          const start = (qualifyingPage - 1) * qualifyingRowsPerPage
+                                          const paginated = filtered.slice(start, start + qualifyingRowsPerPage)
+                                          const totalQualifyingPages = Math.ceil(
+                                            filtered.length / qualifyingRowsPerPage
+                                          )
+
+                                          return (
+                                            <>
+                                              {paginated.map((agent: any, idx: number) => {
+                                                const capitalAdvanced = agent.total_amount || 0
+                                                const agentCommission =
+                                                  capitalAdvanced * (activeCommissionConfig?.commissionRate || 0.05)
+                                                const saCommission =
+                                                  agentCommission *
+                                                  (activeCommissionConfig?.superAgentCommissionRate || 0.2)
+
+                                                return (
+                                                  <TableRow key={idx} hover>
+                                                    <TableCell>
+                                                      <Typography
+                                                        variant='body2'
+                                                        fontWeight='medium'
+                                                        sx={{
+                                                          cursor: 'pointer',
+                                                          color: 'primary.main',
+                                                          '&:hover': { textDecoration: 'underline' }
+                                                        }}
+                                                        onClick={() => router.push(`/agents/view/${agent.id}`)}
+                                                      >
+                                                        {agent.name}
+                                                      </Typography>
+                                                      <Typography variant='caption' color='text.secondary'>
+                                                        {agent.account_number}
+                                                      </Typography>
+                                                      {agent.source && (
+                                                        <Chip
+                                                          label={agent.source === 'assigned' ? 'Assigned' : 'Detected'}
+                                                          size='small'
+                                                          color={agent.source === 'assigned' ? 'primary' : 'default'}
+                                                          variant='outlined'
+                                                          sx={{ height: 16, fontSize: '0.6rem', mt: 0.25 }}
+                                                        />
+                                                      )}
+                                                    </TableCell>
+                                                    <TableCell align='right'>
+                                                      <Typography variant='body2'>
+                                                        TZS {capitalAdvanced.toLocaleString()}
+                                                      </Typography>
+                                                    </TableCell>
+                                                    <TableCell align='right'>
+                                                      <Typography variant='body2'>
+                                                        {agent.transaction_count || 0}
+                                                      </Typography>
+                                                    </TableCell>
+                                                    <TableCell align='right'>
+                                                      <Typography variant='body2' color='info.main' fontWeight='medium'>
+                                                        TZS{' '}
+                                                        {(
+                                                          agent.agent_turnover ||
+                                                          agent.total_amount ||
+                                                          0
+                                                        ).toLocaleString()}
+                                                      </Typography>
+                                                      <Typography
+                                                        variant='caption'
+                                                        color='text.secondary'
+                                                        display='block'
+                                                      >
+                                                        (Turnover)
+                                                      </Typography>
+                                                    </TableCell>
+                                                    <TableCell align='right'>
+                                                      <Typography variant='body2' color='primary.main'>
+                                                        TZS{' '}
+                                                        {agentCommission.toLocaleString(undefined, {
+                                                          minimumFractionDigits: 2,
+                                                          maximumFractionDigits: 2
+                                                        })}
+                                                      </Typography>
+                                                    </TableCell>
+                                                    <TableCell align='right'>
+                                                      <Typography
+                                                        variant='body2'
+                                                        color='success.main'
+                                                        fontWeight='medium'
+                                                      >
+                                                        TZS{' '}
+                                                        {saCommission.toLocaleString(undefined, {
+                                                          minimumFractionDigits: 2,
+                                                          maximumFractionDigits: 2
+                                                        })}
+                                                      </Typography>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                      <Chip
+                                                        label='Qualified'
+                                                        size='small'
+                                                        color='success'
+                                                        variant='outlined'
+                                                      />
+                                                    </TableCell>
+                                                  </TableRow>
+                                                )
+                                              })}
+
+                                              {/* Pagination for qualifying agents */}
+                                              {totalQualifyingPages > 1 && (
+                                                <TableRow>
+                                                  <TableCell colSpan={7} sx={{ borderBottom: 0 }}>
+                                                    <Box
+                                                      sx={{
+                                                        display: 'flex',
+                                                        justifyContent: 'space-between',
+                                                        alignItems: 'center',
+                                                        py: 1
+                                                      }}
+                                                    >
+                                                      <Typography variant='body2' color='text.secondary'>
+                                                        Showing {paginated.length} of {filtered.length} agents
+                                                      </Typography>
+                                                      <Pagination
+                                                        count={totalQualifyingPages}
+                                                        page={qualifyingPage}
+                                                        onChange={(_, p) => setQualifyingPage(p)}
+                                                        color='primary'
+                                                        showFirstButton
+                                                        showLastButton
+                                                        size='small'
+                                                      />
+                                                    </Box>
+                                                  </TableCell>
+                                                </TableRow>
+                                              )}
+                                            </>
+                                          )
+                                        })()}
+                                      </TableBody>
+                                    </Table>
+                                  </TableContainer>
+                                </>
+                              ) : (
+                                <Box sx={{ textAlign: 'center', py: 4 }}>
+                                  <Typography variant='body2' color='text.secondary'>
+                                    No qualifying agents found
+                                  </Typography>
+                                </Box>
+                              )}
+                            </CardContent>
+                          </Card>
+
+                          {/* Inactive/Excluded Agents (below threshold) */}
+                          {(() => {
+                            const allAgents = transactionAgents.filter(a => a.id !== null)
+                            const qualifyingIds = new Set(qualifyingAgentsList.map((a: any) => a.account_number))
+                            const excludedAgents = allAgents.filter(a => !qualifyingIds.has(a.account_number))
+
+                            if (excludedAgents.length === 0) return null
+
+                            return (
+                              <Card sx={{ mt: 4 }}>
+                                <CardHeader
+                                  title={`Excluded Agents (${excludedAgents.length})`}
+                                  subheader={`Agents below ${(
+                                    activeCommissionConfig?.minTransactionAmount || 100000
+                                  ).toLocaleString()} TZS threshold`}
+                                  titleTypographyProps={{ variant: 'h6' }}
+                                />
+                                <CardContent sx={{ p: 0 }}>
+                                  <TableContainer>
+                                    <Table size='small'>
+                                      <TableHead>
+                                        <TableRow>
+                                          <TableCell sx={{ fontWeight: 600 }}>Agent</TableCell>
+                                          <TableCell align='right' sx={{ fontWeight: 600 }}>
+                                            Amount
+                                          </TableCell>
+                                          <TableCell align='right' sx={{ fontWeight: 600 }}>
+                                            Tx Count
+                                          </TableCell>
+                                          <TableCell>Status</TableCell>
+                                        </TableRow>
+                                      </TableHead>
+                                      <TableBody>
+                                        {excludedAgents.map((agent: any, idx: number) => (
+                                          <TableRow key={idx} hover>
+                                            <TableCell>
+                                              <Typography variant='body2' fontWeight='medium'>
+                                                {agent.name}
+                                              </Typography>
+                                              <Typography variant='caption' color='text.secondary'>
+                                                {agent.account_number}
+                                              </Typography>
+                                            </TableCell>
+                                            <TableCell align='right'>
+                                              <Typography variant='body2'>
+                                                TZS {agent.total_amount?.toLocaleString() || 0}
+                                              </Typography>
+                                            </TableCell>
+                                            <TableCell align='right'>
+                                              <Typography variant='body2'>{agent.transaction_count || 0}</Typography>
+                                            </TableCell>
+                                            <TableCell>
+                                              <Chip label='Excluded' size='small' color='error' variant='outlined' />
+                                            </TableCell>
+                                          </TableRow>
+                                        ))}
+                                      </TableBody>
+                                    </Table>
+                                  </TableContainer>
+                                </CardContent>
+                              </Card>
+                            )
+                          })()}
+                        </>
+                      )
+                    })()
+                  ) : (
+                    <>
+                      {/* Summary Cards Franchise*/}
+                      <Grid container spacing={3} sx={{ mb: 4 }}>
+                        <Grid item xs={6} md={3}>
+                          <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                            <Icon icon='tabler:users' fontSize='1.5rem' color='primary' />
+                            <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
+                              {commissionData.length}
+                            </Typography>
+                            <Typography variant='caption'>Agents Served</Typography>
+                          </Card>
+                        </Grid>
+                        <Grid item xs={6} md={3}>
+                          <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                            <Icon icon='tabler:currency-dollar' fontSize='1.5rem' color='success' />
+                            <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
+                              TZS {commissionData.reduce((s, c) => s + (c.finalCommission || 0), 0).toLocaleString()}
+                            </Typography>
+                            <Typography variant='caption'>Total Commission</Typography>
+                          </Card>
+                        </Grid>
+                        <Grid item xs={6} md={3}>
+                          <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                            <Icon icon='tabler:exchange' fontSize='1.5rem' color='warning' />
+                            <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
+                              {commissionData.reduce((s, c) => s + (c.transactionCount || 0), 0)}
+                            </Typography>
+                            <Typography variant='caption'>Total Transactions</Typography>
+                          </Card>
+                        </Grid>
+                        <Grid item xs={6} md={3}>
+                          <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
+                            <Icon icon='tabler:chart-bar' fontSize='1.5rem' color='info' />
+                            <Typography variant='h5' sx={{ mt: 1, fontWeight: 600 }}>
+                              TZS{' '}
+                              {(commissionData.length > 0
+                                ? commissionData.reduce((s, c) => s + c.finalCommission, 0) / commissionData.length
+                                : 0
+                              ).toLocaleString()}
+                            </Typography>
+                            <Typography variant='caption'>Avg Commission</Typography>
+                          </Card>
+                        </Grid>
+                      </Grid>
+
+                      {/* Franchise Table with search & pagination */}
+                      <Grid container spacing={2} sx={{ mb: 3 }}>
+                        <Grid item xs={12} md={6}>
+                          <TextField
+                            fullWidth
+                            size='small'
+                            placeholder='Search by name or account number...'
+                            value={commissionSearchTerm}
+                            onChange={e => {
+                              setCommissionSearchTerm(e.target.value)
+                              setCommissionPage(1)
+                            }}
+                            InputProps={{
+                              startAdornment: (
+                                <InputAdornment position='start'>
+                                  <Icon icon='tabler:search' />
+                                </InputAdornment>
+                              )
+                            }}
+                          />
+                        </Grid>
+                        <Grid item xs={12} md={3}>
+                          <FormControl fullWidth size='small'>
+                            <InputLabel>Rows per page</InputLabel>
+                            <Select
+                              value={commissionRowsPerPage}
+                              label='Rows per page'
+                              onChange={e => {
+                                setCommissionRowsPerPage(Number(e.target.value))
+                                setCommissionPage(1)
+                              }}
+                            >
+                              <MenuItem value={25}>25</MenuItem>
+                              <MenuItem value={50}>50</MenuItem>
+                              <MenuItem value={100}>100</MenuItem>
+                              <MenuItem value={250}>250</MenuItem>
+                            </Select>
+                          </FormControl>
+                        </Grid>
+                      </Grid>
+
+                      <TableContainer component={Paper}>
+                        <Table size='small'>
+                          <TableHead>
+                            <TableRow>
+                              <TableCell sx={{ fontWeight: 600 }}>Agent</TableCell>
                               <TableCell align='right' sx={{ fontWeight: 600 }}>
                                 Capital Advanced
                               </TableCell>
-                            )}
-                            <TableCell align='right' sx={{ fontWeight: 600 }}>
-                              Agent Transactions
-                            </TableCell>
-                            <TableCell align='center' sx={{ fontWeight: 600 }}>
-                              Tx Count
-                            </TableCell>
-                            <TableCell sx={{ fontWeight: 600, minWidth: 220 }}>Performance</TableCell>
-                            <TableCell align='right' sx={{ fontWeight: 600 }}>
-                              Commission
-                            </TableCell>
-                          </TableRow>
-                        </TableHead>
-                        <TableBody>
-                          {paginatedCommissionData.map((calc, index) => {
-                            let perfLabel: { label: string; color: any }
-                            let perfValue: number
+                              <TableCell align='right' sx={{ fontWeight: 600 }}>
+                                Transactions
+                              </TableCell>
+                              {/* <TableCell align='center' sx={{ fontWeight: 600 }}>
+                                Tx Count
+                              </TableCell> */}
+                              <TableCell sx={{ fontWeight: 600, minWidth: 220 }}>Performance</TableCell>
+                              <TableCell align='right' sx={{ fontWeight: 600 }}>
+                                Commission
+                              </TableCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {paginatedCommissionData.map((calc: any, index: number) => {
+                              const perfLabel = getFranchisePerformanceLabel(calc.payband || '')
+                              const perfValue = calc.performancePct || 0
 
-                            if (agent?.type === 'super_agent') {
-                              perfValue = (calc as any).kpiScore || 0
-                              perfLabel = getSuperAgentPerformanceLabel(perfValue)
-                            } else {
-                              perfValue = (calc as any).performancePct || 0
-                              perfLabel = getFranchisePerformanceLabel((calc as any).payband || '')
-                            }
-
-                            return (
-                              <TableRow key={index} hover>
-                                <TableCell>
-                                  <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                              return (
+                                <TableRow key={index} hover>
+                                  <TableCell>
                                     <Typography variant='body2' fontWeight='medium'>
                                       {calc.agentName}
                                     </Typography>
                                     <Typography variant='caption' color='text.secondary'>
                                       {calc.accountNumber}
                                     </Typography>
-                                  </Box>
-                                </TableCell>
-                                {agent?.type === 'franchise' && (
+                                  </TableCell>
                                   <TableCell align='right'>
                                     <Typography variant='body2'>
-                                      TZS {(calc as any).capitalAdvanced?.toLocaleString() || 'N/A'}
+                                      TZS {calc.capitalAdvanced?.toLocaleString() || 'N/A'}
                                     </Typography>
-                                    {(calc as any).expectedTurnover > 0 && (
+                                    {calc.expectedTurnover > 0 && (
                                       <Typography variant='caption' color='text.secondary' display='block'>
-                                        Expected: TZS {(calc as any).expectedTurnover?.toLocaleString()}
+                                        Expected: TZS {calc.expectedTurnover?.toLocaleString()}
                                       </Typography>
                                     )}
                                   </TableCell>
-                                )}
-                                <TableCell align='right'>
-                                  <Typography variant='body2' fontWeight='medium'>
-                                    TZS {calc.totalTransactions?.toLocaleString() || 0}
-                                  </Typography>
-                                </TableCell>
-                                <TableCell align='center'>
-                                  <Typography variant='body2'>{calc.transactionCount}</Typography>
-                                </TableCell>
-                                <TableCell>
-                                  {/* Performance Label ABOVE the progress bar */}
-                                  <Box sx={{ mb: 0.5 }}>
-                                    <Chip
-                                      label={`${perfLabel.label} (${perfValue.toFixed(0)}%)`}
-                                      size='small'
-                                      color={perfLabel.color}
-                                      variant='outlined'
-                                      sx={{ height: 20, fontSize: '0.7rem' }}
-                                    />
-                                  </Box>
-                                  {/* Progress Bar BELOW the label */}
-                                  <LinearProgress
-                                    variant='determinate'
-                                    value={Math.min(perfValue, 100)}
-                                    sx={{
-                                      height: 6,
-                                      borderRadius: 3,
-                                      '& .MuiLinearProgress-bar': {
-                                        borderRadius: 3,
-                                        bgcolor:
-                                          perfValue >= 80
-                                            ? 'success.main'
-                                            : perfValue >= 60
-                                            ? 'primary.main'
-                                            : perfValue >= 40
-                                            ? 'warning.main'
-                                            : 'error.main'
-                                      }
-                                    }}
-                                  />
-                                </TableCell>
-                                <TableCell align='right'>
-                                  <Typography variant='body2' fontWeight='bold' color='success.main'>
-                                    TZS {calc.finalCommission?.toLocaleString() || 0}
-                                  </Typography>
-                                  {(calc as any).clawback > 0 && (
-                                    <Typography variant='caption' color='error.main' display='block'>
-                                      Clawback: TZS {(calc as any).clawback?.toLocaleString()}
+                                  <TableCell align='right'>
+                                    <Typography variant='body2' fontWeight='medium'>
+                                      TZS {calc.totalTransactions?.toLocaleString() || 0}
                                     </Typography>
-                                  )}
-                                </TableCell>
-                              </TableRow>
-                            )
-                          })}
-                        </TableBody>
-                      </Table>
-                    </TableContainer>
-
-                    {/* Pagination */}
-                    {totalCommissionPages > 1 && (
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 4 }}>
-                        <Typography variant='body2' color='text.secondary'>
-                          Showing {paginatedCommissionData.length} of {filteredCommissionData.length} agents
-                        </Typography>
-                        <Pagination
-                          count={totalCommissionPages}
-                          page={commissionPage}
-                          onChange={(_, page) => setCommissionPage(page)}
-                          color='primary'
-                          showFirstButton
-                          showLastButton
-                          size='medium'
-                        />
-                      </Box>
-                    )}
-                  </>
+                                  </TableCell>
+                                  {/* <TableCell align='center'>
+                                    <Typography variant='body2'>{calc.transactionCount}</Typography>
+                                  </TableCell> */}
+                                  <TableCell>
+                                    <Box sx={{ mb: 0.5 }}>
+                                      <Chip
+                                        label={`${perfLabel.label} (${perfValue.toFixed(0)}%)`}
+                                        size='small'
+                                        color={perfLabel.color}
+                                        variant='outlined'
+                                        sx={{ height: 20, fontSize: '0.7rem' }}
+                                      />
+                                    </Box>
+                                    <LinearProgress
+                                      variant='determinate'
+                                      value={Math.min(perfValue, 100)}
+                                      sx={{
+                                        height: 6,
+                                        borderRadius: 3,
+                                        '& .MuiLinearProgress-bar': { borderRadius: 3 }
+                                      }}
+                                    />
+                                  </TableCell>
+                                  <TableCell align='right'>
+                                    <Typography variant='body2' fontWeight='bold' color='success.main'>
+                                      TZS {calc.finalCommission?.toLocaleString() || 0}
+                                    </Typography>
+                                    {calc.clawback > 0 && (
+                                      <Typography variant='caption' color='error.main' display='block'>
+                                        Clawback: TZS {calc.clawback?.toLocaleString()}
+                                      </Typography>
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              )
+                            })}
+                          </TableBody>
+                        </Table>
+                      </TableContainer>
+                      {totalCommissionPages > 1 && (
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 4 }}>
+                          <Typography variant='body2' color='text.secondary'>
+                            Showing {paginatedCommissionData.length} of {filteredCommissionData.length}
+                          </Typography>
+                          <Pagination
+                            count={totalCommissionPages}
+                            page={commissionPage}
+                            onChange={(_, p) => setCommissionPage(p)}
+                            color='primary'
+                            showFirstButton
+                            showLastButton
+                            size='medium'
+                          />
+                        </Box>
+                      )}
+                    </>
+                  )
                 ) : (
                   <Box sx={{ textAlign: 'center', py: 6 }}>
                     <Icon icon='tabler:calculator' fontSize='3rem' color='text.secondary' />
@@ -1950,7 +2578,7 @@ const AgentView = () => {
                       No Commission Data
                     </Typography>
                     <Typography variant='body2' color='text.secondary' sx={{ mb: 2 }}>
-                      Click "Recalculate" to compute commissions for the selected period.
+                      Click "Recalculate" to compute commissions.
                     </Typography>
                     <Button
                       variant='outlined'

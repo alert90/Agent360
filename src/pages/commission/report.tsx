@@ -1,6 +1,6 @@
 // src/views/pages/commission-report/index.tsx
 // ** React Imports
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 
 // ** MUI Imports
 import Box from '@mui/material/Box'
@@ -8,7 +8,6 @@ import Grid from '@mui/material/Grid'
 import Card from '@mui/material/Card'
 import Button from '@mui/material/Button'
 import Typography from '@mui/material/Typography'
-import CardHeader from '@mui/material/CardHeader'
 import CardContent from '@mui/material/CardContent'
 import FormControl from '@mui/material/FormControl'
 import InputLabel from '@mui/material/InputLabel'
@@ -28,11 +27,14 @@ import Alert from '@mui/material/Alert'
 import CircularProgress from '@mui/material/CircularProgress'
 import Pagination from '@mui/material/Pagination'
 import InputAdornment from '@mui/material/InputAdornment'
-import Collapse from '@mui/material/Collapse'
 import IconButton from '@mui/material/IconButton'
+import { Divider } from '@mui/material'
 
 // ** Icon Imports
 import Icon from 'src/@core/components/icon'
+
+// ** Custom Components
+import CardStatsVertical from 'src/@core/components/card-statistics/card-stats-vertical'
 
 interface SuperAgentKPI {
   totalAgents: number
@@ -82,7 +84,6 @@ const CommissionReport = () => {
   })
   const [agentType, setAgentType] = useState<'SUPER_AGENT' | 'FRANCHISE'>('SUPER_AGENT')
   const [loading, setLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
   const [results, setResults] = useState<CommissionResult[]>([])
   const [error, setError] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
@@ -90,8 +91,57 @@ const CommissionReport = () => {
   const [page, setPage] = useState(1)
   const [rowsPerPage, setRowsPerPage] = useState(25)
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
+  const [savedStats, setSavedStats] = useState<any>(null)
 
-  // Filter and paginate
+  // Fetch saved commission stats on load
+  useEffect(() => {
+    fetchSavedCommissions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period, agentType])
+
+  const fetchSavedCommissions = async () => {
+    try {
+      const dbType = agentType === 'SUPER_AGENT' ? 'super_agent' : 'franchise'
+      const res = await fetch(`/api/commissions/history?period=${period}&agentType=${dbType}`)
+      if (res.ok) {
+        const data = await res.json()
+        if (data.success && data.summary) {
+          setSavedStats(data.summary)
+          if (data.data && data.data.length > 0) {
+            const mapped: CommissionResult[] = data.data.map((r: any) => ({
+              agentId: r.agentId,
+              agentName: r.agentName,
+              agentType: r.agentType,
+              accountNumber: r.accountNumber || '',
+              period: r.period,
+              totalAmount: r.totalAmount,
+              transactionCount: r.transactionCount,
+              eligibleAmount: r.eligibleAmount,
+              commissionRate: r.commissionRate,
+              commissionAmount: r.commissionAmount,
+              payband: r.payband,
+              finalCommission: r.finalCommission,
+              clawback: r.clawback,
+              kpiDetails: r.performance
+                ? typeof r.performance === 'string'
+                  ? JSON.parse(r.performance)
+                  : r.performance
+                : undefined,
+              performance: r.performance
+                ? typeof r.performance === 'string'
+                  ? JSON.parse(r.performance)
+                  : r.performance
+                : undefined
+            }))
+            setResults(mapped)
+          }
+        }
+      }
+    } catch (e) {
+      console.log('No saved commissions found')
+    }
+  }
+
   const filteredResults = useMemo(() => {
     if (!searchTerm) return results
     const lower = searchTerm.toLowerCase()
@@ -109,7 +159,6 @@ const CommissionReport = () => {
 
   const totalPages = Math.ceil(filteredResults.length / rowsPerPage)
 
-  // Summary
   const summary = useMemo(() => {
     const superAgentResults = results.filter(r => r.agentType === 'super_agent')
     const franchiseResults = results.filter(r => r.agentType === 'franchise')
@@ -126,20 +175,12 @@ const CommissionReport = () => {
       avgKPIScore:
         superAgentResults.length > 0
           ? superAgentResults.reduce((sum, r) => sum + (r.kpiDetails?.totalScore || 0), 0) / superAgentResults.length
-          : 0,
-      paybandDistribution: franchiseResults.reduce((acc: Record<string, number>, r) => {
-        const band = r.performance?.paybandLevel || 'Unknown'
-        acc[band] = (acc[band] || 0) + 1
-
-        return acc
-      }, {} as Record<string, number>)
+          : 0
     }
   }, [results])
 
-  // Use the backend CommissionCalculator API which saves to database
   const calculateCommissions = async () => {
     if (!period) return
-
     setLoading(true)
     setError(null)
     setSuccessMsg(null)
@@ -147,17 +188,10 @@ const CommissionReport = () => {
 
     try {
       const dbType = agentType === 'SUPER_AGENT' ? 'super_agent' : 'franchise'
-
-      // Call the calculate API which uses CommissionCalculator service
-      // This saves results to the database automatically
       const response = await fetch('/api/commissions/calculate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          period,
-          agentType: dbType,
-          background: false
-        })
+        body: JSON.stringify({ period, agentType: dbType, background: false })
       })
 
       if (!response.ok) {
@@ -166,9 +200,7 @@ const CommissionReport = () => {
       }
 
       const data = await response.json()
-
       if (data.success && data.results) {
-        // Map the results to our interface
         const mappedResults: CommissionResult[] = data.results.map((r: any) => ({
           agentId: r.agentId,
           agentName: r.agentName,
@@ -183,22 +215,12 @@ const CommissionReport = () => {
           payband: r.payband,
           finalCommission: r.finalCommission,
           clawback: r.clawback,
-          kpiDetails: r.kpiDetails
-            ? typeof r.kpiDetails === 'string'
-              ? JSON.parse(r.kpiDetails)
-              : r.kpiDetails
-            : undefined,
+          kpiDetails: r.kpiDetails,
           performance: r.performance
-            ? typeof r.performance === 'string'
-              ? JSON.parse(r.performance)
-              : r.performance
-            : undefined
         }))
-
         setResults(mappedResults)
-        setSuccessMsg(
-          `Successfully calculated and saved commissions for ${mappedResults.length} ${dbType.replace('_', ' ')}s`
-        )
+        setSavedStats(data.summary)
+        setSuccessMsg(`Successfully calculated commissions for ${mappedResults.length} ${dbType.replace('_', ' ')}s`)
       }
     } catch (err) {
       console.error('Calculation error:', err)
@@ -208,20 +230,77 @@ const CommissionReport = () => {
     }
   }
 
+  const handleExportCSV = () => {
+    const headers =
+      agentType === 'SUPER_AGENT'
+        ? [
+            'Agent Name',
+            'Account Number',
+            'Total Agents',
+            'Active Agents',
+            'KPI Score',
+            'KPI Band',
+            'Fixed Commission',
+            'Variable Commission',
+            'Final Commission'
+          ]
+        : [
+            'Agent Name',
+            'Account Number',
+            'Capital Advanced',
+            'Expected Turnover',
+            'Actual Turnover',
+            'Performance',
+            'Payband',
+            'Commission',
+            'Clawback'
+          ]
+
+    const rows = results.map(r => {
+      if (agentType === 'SUPER_AGENT') {
+        return [
+          r.agentName,
+          r.accountNumber,
+          r.kpiDetails?.totalAgents || 0,
+          r.kpiDetails?.activeAgents || 0,
+          `${(r.kpiDetails?.totalScore || 0).toFixed(1)}%`,
+          `${r.kpiDetails?.kpiBand || 0}%`,
+          r.kpiDetails?.fixedCommission || 0,
+          r.kpiDetails?.variableCommission || 0,
+          r.finalCommission
+        ]
+      } else {
+        return [
+          r.agentName,
+          r.accountNumber,
+          r.performance?.totalCapitalAdvanced || 0,
+          r.performance?.expectedTurnover || 0,
+          r.performance?.actualTurnover || 0,
+          `${(r.performance?.performancePercentage || 0).toFixed(1)}%`,
+          r.performance?.paybandLevel || 'N/A',
+          r.finalCommission,
+          r.clawback || 0
+        ]
+      }
+    })
+
+    const csvContent = [headers, ...rows].map(row => row.map(f => `"${f}"`).join(',')).join('\n')
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = `commission-report-${agentType.toLowerCase()}-${period}.csv`
+    link.click()
+  }
+
   const toggleRowExpansion = (agentId: number) => {
     setExpandedRows(prev => {
       const next = new Set(prev)
-      if (next.has(agentId)) {
-        next.delete(agentId)
-      } else {
-        next.add(agentId)
-      }
+      next.has(agentId) ? next.delete(agentId) : next.add(agentId)
 
       return next
     })
   }
 
-  // Period options
   const periodOptions = useMemo(() => {
     const options = []
     const now = new Date()
@@ -262,6 +341,16 @@ const CommissionReport = () => {
     }
   }
 
+  const formatCurrency = (amount: number): string => {
+    if (!amount || amount === 0) return '0'
+    if (amount >= 1000000) return `${(amount / 1000000).toFixed(1)}M`
+    if (amount >= 1000) return `${(amount / 1000).toFixed(0)}K`
+
+    return amount.toLocaleString()
+  }
+
+  const displayStats = savedStats || summary
+
   return (
     <Box sx={{ p: 6 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 6 }}>
@@ -270,7 +359,7 @@ const CommissionReport = () => {
             Commission Report
           </Typography>
           <Typography variant='body1' color='text.secondary'>
-            Calculate and save commissions for {agentType === 'SUPER_AGENT' ? 'Super Agents' : 'Franchises'}
+            Calculate and view commissions for {agentType === 'SUPER_AGENT' ? 'Super Agents' : 'Franchises'}
           </Typography>
         </Box>
       </Box>
@@ -290,6 +379,7 @@ const CommissionReport = () => {
                     setResults([])
                     setError(null)
                     setSuccessMsg(null)
+                    setSavedStats(null)
                   }}
                 >
                   <MenuItem value='SUPER_AGENT'>Super Agent</MenuItem>
@@ -309,17 +399,40 @@ const CommissionReport = () => {
                 </Select>
               </FormControl>
             </Grid>
-            <Grid item xs={12} md={3}>
+            <Grid item xs={12} md={2}>
               <Button
                 fullWidth
                 variant='contained'
                 onClick={calculateCommissions}
-                disabled={loading || saving}
+                disabled={loading}
                 startIcon={loading ? <CircularProgress size={20} /> : <Icon icon='tabler:calculator' />}
               >
-                {loading ? 'Calculating & Saving...' : 'Calculate & Save Commissions'}
+                {loading ? 'Calculating...' : 'Calculate'}
               </Button>
             </Grid>
+            <Grid item xs={12} md={2}>
+              <Button
+                fullWidth
+                variant='outlined'
+                onClick={fetchSavedCommissions}
+                startIcon={<Icon icon='tabler:database' />}
+              >
+                Load Saved
+              </Button>
+            </Grid>
+            {results.length > 0 && (
+              <Grid item xs={12} md={2}>
+                <Button
+                  fullWidth
+                  variant='outlined'
+                  color='success'
+                  onClick={handleExportCSV}
+                  startIcon={<Icon icon='tabler:download' />}
+                >
+                  Export CSV
+                </Button>
+              </Grid>
+            )}
           </Grid>
         </CardContent>
       </Card>
@@ -335,85 +448,96 @@ const CommissionReport = () => {
         </Alert>
       )}
 
-      {/* Summary Cards */}
+      {/* Stats Cards - Consistent with Admin Dashboard */}
+      {(results.length > 0 || savedStats) && (
+        <Grid container spacing={6} sx={{ mb: 6 }}>
+          <Grid item xs={12} sm={6} md={3}>
+            <CardStatsVertical
+              stats={displayStats.totalAgents?.toLocaleString() || '0'}
+              avatarColor='primary'
+              title='Total Agents'
+              subtitle={agentType === 'SUPER_AGENT' ? 'Super Agents' : 'Franchises'}
+              avatarIcon='tabler:users'
+              chipText=''
+              chipColor='default'
+              sx={{ '& .MuiChip-root': { display: 'none' } }}
+            />
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <CardStatsVertical
+              stats={`TZS ${formatCurrency(displayStats.totalCommission || 0)}`}
+              avatarColor='success'
+              title='Total Commission'
+              subtitle='Calculated'
+              avatarIcon='tabler:currency-dollar'
+              chipText=''
+              chipColor='default'
+              sx={{ '& .MuiChip-root': { display: 'none' } }}
+            />
+          </Grid>
+          {agentType === 'SUPER_AGENT' && (
+            <>
+              <Grid item xs={12} sm={6} md={3}>
+                <CardStatsVertical
+                  stats={`TZS ${formatCurrency(displayStats.totalFixedCommission || 0)}`}
+                  avatarColor='info'
+                  title='Fixed Commission'
+                  subtitle='30% Portion'
+                  avatarIcon='tabler:lock'
+                  chipText=''
+                  chipColor='default'
+                  sx={{ '& .MuiChip-root': { display: 'none' } }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <CardStatsVertical
+                  stats={`TZS ${formatCurrency(displayStats.totalVariableCommission || 0)}`}
+                  avatarColor='warning'
+                  title='Variable Commission'
+                  subtitle='70% KPI-Based'
+                  avatarIcon='tabler:chart-line'
+                  chipText=''
+                  chipColor='default'
+                  sx={{ '& .MuiChip-root': { display: 'none' } }}
+                />
+              </Grid>
+            </>
+          )}
+          {agentType === 'FRANCHISE' && (
+            <>
+              <Grid item xs={12} sm={6} md={3}>
+                <CardStatsVertical
+                  stats={displayStats.totalTransactions?.toLocaleString() || '0'}
+                  avatarColor='warning'
+                  title='Total Transactions'
+                  subtitle='Processed'
+                  avatarIcon='tabler:receipt'
+                  chipText=''
+                  chipColor='default'
+                  sx={{ '& .MuiChip-root': { display: 'none' } }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <CardStatsVertical
+                  stats={`TZS ${formatCurrency(displayStats.totalClawback || 0)}`}
+                  avatarColor='error'
+                  title='Total Clawback'
+                  subtitle='Underperformance'
+                  avatarIcon='tabler:arrow-back'
+                  chipText=''
+                  chipColor='default'
+                  sx={{ '& .MuiChip-root': { display: 'none' } }}
+                />
+              </Grid>
+            </>
+          )}
+        </Grid>
+      )}
+
+      {/* Results Table */}
       {results.length > 0 && (
         <>
-          <Grid container spacing={3} sx={{ mb: 4 }}>
-            <Grid item xs={6} md={2}>
-              <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
-                <Typography variant='h5' color='primary.main'>
-                  {summary.totalAgents}
-                </Typography>
-                <Typography variant='caption'>Agents</Typography>
-              </Card>
-            </Grid>
-            <Grid item xs={6} md={2}>
-              <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
-                <Typography variant='h5' color='success.main'>
-                  TZS {summary.totalCommission.toLocaleString()}
-                </Typography>
-                <Typography variant='caption'>Total Commission</Typography>
-              </Card>
-            </Grid>
-            {agentType === 'SUPER_AGENT' && (
-              <>
-                <Grid item xs={6} md={2}>
-                  <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
-                    <Typography variant='h5' color='info.main'>
-                      TZS {summary.totalFixedCommission.toLocaleString()}
-                    </Typography>
-                    <Typography variant='caption'>Fixed Commission</Typography>
-                  </Card>
-                </Grid>
-                <Grid item xs={6} md={2}>
-                  <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
-                    <Typography variant='h5' color='warning.main'>
-                      TZS {summary.totalVariableCommission.toLocaleString()}
-                    </Typography>
-                    <Typography variant='caption'>Variable Commission</Typography>
-                  </Card>
-                </Grid>
-                <Grid item xs={6} md={2}>
-                  <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
-                    <Typography variant='h5'>{summary.avgKPIScore.toFixed(1)}%</Typography>
-                    <Typography variant='caption'>Avg KPI Score</Typography>
-                  </Card>
-                </Grid>
-              </>
-            )}
-            {agentType === 'FRANCHISE' && (
-              <Grid item xs={6} md={2}>
-                <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
-                  <Typography variant='h5' color='error.main'>
-                    TZS {summary.totalClawback.toLocaleString()}
-                  </Typography>
-                  <Typography variant='caption'>Total Clawback</Typography>
-                </Card>
-              </Grid>
-            )}
-            <Grid item xs={6} md={2}>
-              <Card variant='outlined' sx={{ textAlign: 'center', p: 2 }}>
-                <Typography variant='h5'>TZS {summary.avgCommission.toLocaleString()}</Typography>
-                <Typography variant='caption'>Avg Commission</Typography>
-              </Card>
-            </Grid>
-          </Grid>
-
-          {/* Payband Distribution (Franchise only) */}
-          {agentType === 'FRANCHISE' && Object.keys(summary.paybandDistribution).length > 0 && (
-            <Card sx={{ mb: 4 }}>
-              <CardHeader title='Payband Distribution' titleTypographyProps={{ variant: 'h6' }} />
-              <CardContent>
-                <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                  {Object.entries(summary.paybandDistribution).map(([band, count]) => (
-                    <Chip key={band} label={`${band}: ${count}`} color={getPaybandColor(band)} variant='outlined' />
-                  ))}
-                </Box>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Search & Rows */}
+          {/* Search & Rows + Export */}
           <Grid container spacing={2} sx={{ mb: 3 }}>
             <Grid item xs={12} md={6}>
               <TextField
@@ -453,7 +577,7 @@ const CommissionReport = () => {
             </Grid>
           </Grid>
 
-          {/* Results Table */}
+          {/* Table */}
           <Card>
             <CardContent>
               <TableContainer component={Paper}>
@@ -535,11 +659,7 @@ const CommissionReport = () => {
                                     : r.performance?.performancePercentage || 0,
                                   100
                                 )}
-                                sx={{
-                                  height: 6,
-                                  borderRadius: 3,
-                                  '& .MuiLinearProgress-bar': { borderRadius: 3 }
-                                }}
+                                sx={{ height: 6, borderRadius: 3, '& .MuiLinearProgress-bar': { borderRadius: 3 } }}
                               />
                             </TableCell>
                             <TableCell align='right'>
@@ -553,179 +673,114 @@ const CommissionReport = () => {
                               )}
                             </TableCell>
                           </TableRow>
-                          {/* Expandable KPI Details Row */}
+                          {/* Add this right after the main TableRow closing tag */}
                           {isExpanded && (
                             <TableRow>
                               <TableCell colSpan={6} sx={{ bgcolor: 'action.hover', p: 0 }}>
-                                <Collapse in={isExpanded}>
-                                  <Box sx={{ p: 3 }}>
-                                    {agentType === 'SUPER_AGENT' && r.kpiDetails ? (
-                                      <Grid container spacing={3}>
-                                        <Grid item xs={12}>
-                                          <Typography variant='subtitle2' sx={{ mb: 2 }}>
-                                            KPI Breakdown
-                                          </Typography>
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            Total Agents
-                                          </Typography>
-                                          <Typography variant='body2' fontWeight='bold'>
-                                            {r.kpiDetails.totalAgents}
-                                          </Typography>
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            Active Agents
-                                          </Typography>
-                                          <Typography variant='body2' fontWeight='bold'>
-                                            {r.kpiDetails.activeAgents}
-                                          </Typography>
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            Activeness Score (55%)
-                                          </Typography>
-                                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                            <LinearProgress
-                                              value={r.kpiDetails.activenessScore}
-                                              sx={{ flex: 1, height: 6, borderRadius: 3 }}
-                                            />
-                                            <Typography variant='caption'>
-                                              {r.kpiDetails.activenessScore.toFixed(1)}%
-                                            </Typography>
-                                          </Box>
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            Value Transacted Score (20%)
-                                          </Typography>
-                                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                            <LinearProgress
-                                              value={r.kpiDetails.valueTransactedScore}
-                                              sx={{ flex: 1, height: 6, borderRadius: 3 }}
-                                              color='success'
-                                            />
-                                            <Typography variant='caption'>
-                                              {r.kpiDetails.valueTransactedScore.toFixed(1)}%
-                                            </Typography>
-                                          </Box>
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            Unique Agents Score (25%)
-                                          </Typography>
-                                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                            <LinearProgress
-                                              value={r.kpiDetails.uniqueAgentsScore}
-                                              sx={{ flex: 1, height: 6, borderRadius: 3 }}
-                                              color='warning'
-                                            />
-                                            <Typography variant='caption'>
-                                              {r.kpiDetails.uniqueAgentsScore.toFixed(1)}%
-                                            </Typography>
-                                          </Box>
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            KPI Band
-                                          </Typography>
-                                          <Chip
-                                            label={`${r.kpiDetails.kpiBand}%`}
-                                            size='small'
-                                            color='primary'
-                                            variant='outlined'
-                                          />
-                                        </Grid>
-                                        <Grid item xs={12}>
-                                          <Divider sx={{ my: 1 }} />
-                                          <Typography variant='subtitle2' sx={{ mb: 1 }}>
-                                            Commission Split
-                                          </Typography>
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            Fixed (30%)
-                                          </Typography>
-                                          <Typography variant='body2' fontWeight='bold' color='info.main'>
-                                            TZS {r.kpiDetails.fixedCommission.toLocaleString()}
-                                          </Typography>
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            Variable (70%)
-                                          </Typography>
-                                          <Typography variant='body2' fontWeight='bold' color='warning.main'>
-                                            TZS {r.kpiDetails.variableCommission.toLocaleString()}
-                                          </Typography>
-                                        </Grid>
+                                <Box sx={{ p: 3 }}>
+                                  {agentType === 'SUPER_AGENT' && r.kpiDetails ? (
+                                    <Grid container spacing={3}>
+                                      <Grid item xs={12}>
+                                        <Typography variant='subtitle2' sx={{ mb: 1 }}>
+                                          KPI Breakdown
+                                        </Typography>
                                       </Grid>
-                                    ) : r.performance ? (
-                                      <Grid container spacing={3}>
-                                        <Grid item xs={12}>
-                                          <Typography variant='subtitle2' sx={{ mb: 2 }}>
-                                            Franchise Performance Details
-                                          </Typography>
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            Capital Advanced
-                                          </Typography>
-                                          <Typography variant='body2' fontWeight='bold'>
-                                            TZS {r.performance.totalCapitalAdvanced?.toLocaleString()}
-                                          </Typography>
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            Expected Turnover
-                                          </Typography>
-                                          <Typography variant='body2'>
-                                            TZS {r.performance.expectedTurnover?.toLocaleString()}
-                                          </Typography>
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            Actual Turnover
-                                          </Typography>
-                                          <Typography variant='body2'>
-                                            TZS {r.performance.actualTurnover?.toLocaleString()}
-                                          </Typography>
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            Performance
-                                          </Typography>
-                                          <Chip
-                                            label={`${
-                                              r.performance.paybandLevel
-                                            } (${r.performance.performancePercentage?.toFixed(1)}%)`}
-                                            size='small'
-                                            color={getPaybandColor(r.performance.paybandLevel || '')}
-                                          />
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            Apportion Rate
-                                          </Typography>
-                                          <Typography variant='body2'>
-                                            {(r.performance.apportionRate || 0) * 100}%
-                                          </Typography>
-                                        </Grid>
-                                        <Grid item xs={6} md={3}>
-                                          <Typography variant='caption' color='text.secondary'>
-                                            Clawback Amount
-                                          </Typography>
-                                          <Typography variant='body2' color='error.main'>
-                                            TZS {r.performance.clawbackAmount?.toLocaleString()}
-                                          </Typography>
-                                        </Grid>
+                                      <Grid item xs={6} md={3}>
+                                        <Typography variant='caption' color='text.secondary'>
+                                          Total Agents
+                                        </Typography>
+                                        <Typography variant='body2' fontWeight='bold'>
+                                          {r.kpiDetails.totalAgents}
+                                        </Typography>
                                       </Grid>
-                                    ) : null}
-                                  </Box>
-                                </Collapse>
+                                      <Grid item xs={6} md={3}>
+                                        <Typography variant='caption' color='text.secondary'>
+                                          Active Agents
+                                        </Typography>
+                                        <Typography variant='body2' fontWeight='bold'>
+                                          {r.kpiDetails.activeAgents}
+                                        </Typography>
+                                      </Grid>
+                                      <Grid item xs={6} md={3}>
+                                        <Typography variant='caption' color='text.secondary'>
+                                          KPI Band
+                                        </Typography>
+                                        <Chip
+                                          label={`${r.kpiDetails.kpiBand}%`}
+                                          size='small'
+                                          color='primary'
+                                          variant='outlined'
+                                        />
+                                      </Grid>
+                                      <Grid item xs={12}>
+                                        <Divider sx={{ my: 1 }} />
+                                        <Typography variant='subtitle2' sx={{ mb: 1 }}>
+                                          Commission Split
+                                        </Typography>
+                                      </Grid>
+                                      <Grid item xs={6} md={3}>
+                                        <Typography variant='caption' color='text.secondary'>
+                                          Fixed (30%)
+                                        </Typography>
+                                        <Typography variant='body2' fontWeight='bold' color='info.main'>
+                                          TZS {r.kpiDetails.fixedCommission?.toLocaleString()}
+                                        </Typography>
+                                      </Grid>
+                                      <Grid item xs={6} md={3}>
+                                        <Typography variant='caption' color='text.secondary'>
+                                          Variable (70%)
+                                        </Typography>
+                                        <Typography variant='body2' fontWeight='bold' color='warning.main'>
+                                          TZS {r.kpiDetails.variableCommission?.toLocaleString()}
+                                        </Typography>
+                                      </Grid>
+                                    </Grid>
+                                  ) : r.performance ? (
+                                    <Grid container spacing={3}>
+                                      <Grid item xs={12}>
+                                        <Typography variant='subtitle2' sx={{ mb: 1 }}>
+                                          Franchise Performance
+                                        </Typography>
+                                      </Grid>
+                                      <Grid item xs={6} md={3}>
+                                        <Typography variant='caption' color='text.secondary'>
+                                          Capital Advanced
+                                        </Typography>
+                                        <Typography variant='body2' fontWeight='bold'>
+                                          TZS {r.performance.totalCapitalAdvanced?.toLocaleString()}
+                                        </Typography>
+                                      </Grid>
+                                      <Grid item xs={6} md={3}>
+                                        <Typography variant='caption' color='text.secondary'>
+                                          Expected Turnover
+                                        </Typography>
+                                        <Typography variant='body2'>
+                                          TZS {r.performance.expectedTurnover?.toLocaleString()}
+                                        </Typography>
+                                      </Grid>
+                                      <Grid item xs={6} md={3}>
+                                        <Typography variant='caption' color='text.secondary'>
+                                          Actual Turnover
+                                        </Typography>
+                                        <Typography variant='body2'>
+                                          TZS {r.performance.actualTurnover?.toLocaleString()}
+                                        </Typography>
+                                      </Grid>
+                                      <Grid item xs={6} md={3}>
+                                        <Typography variant='caption' color='text.secondary'>
+                                          Apportion Rate
+                                        </Typography>
+                                        <Typography variant='body2'>
+                                          {(r.performance.apportionRate || 0) * 100}%
+                                        </Typography>
+                                      </Grid>
+                                    </Grid>
+                                  ) : null}
+                                </Box>
                               </TableCell>
                             </TableRow>
                           )}
+                          {/* Expandable details - keep existing */}
                         </>
                       )
                     })}
@@ -755,12 +810,5 @@ const CommissionReport = () => {
   )
 }
 
-// Add missing imports at top
-import Divider from '@mui/material/Divider'
-
-CommissionReport.acl = {
-  action: 'read',
-  subject: 'commissions'
-}
-
+CommissionReport.acl = { action: 'read', subject: 'commissions' }
 export default CommissionReport

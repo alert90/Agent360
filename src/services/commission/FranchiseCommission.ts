@@ -26,24 +26,15 @@ interface FranchiseResult {
 }
 
 export class FranchiseCommission {
-  async calculate(
-    franchiseId: number,
-    period: string,
-    config: any,
-    capitalAdvanced: number
-  ): Promise<FranchiseResult | null> {
+  async calculate(franchiseId: number, period: string, config: any): Promise<FranchiseResult | null> {
     try {
-      console.log(`Calculating Franchise commission for agent ${franchiseId} for period ${period}`)
-
-      // Get date range for the period
       const [year, month] = period.split('-')
       const startDate = new Date(parseInt(year), parseInt(month) - 1, 1)
       const endDate = new Date(parseInt(year), parseInt(month), 0, 23, 59, 59, 999)
 
-      // Get franchise info
       const franchise = await prisma.agent.findUnique({
         where: { id: franchiseId },
-        select: { id: true, name: true, type: true }
+        select: { id: true, name: true, type: true, accountNumber: true }
       })
 
       if (!franchise) {
@@ -54,64 +45,71 @@ export class FranchiseCommission {
 
       console.log(`Processing Franchise: ${franchise.name}`)
 
-      // Get all agents assigned to this franchise
-      const agentAssignments = await prisma.agentAssignment.findMany({
-        where: {
-          franchiseId: franchiseId,
-          status: 'active'
-        },
-        include: {
-          localAgent: true
-        }
-      })
+      // Get detected agents (deposits TO agents = capital advanced)
+      const detectedAgents = await prisma.$queryRaw<any[]>`
+        SELECT
+          t."customer_account" as account_number,
+          COUNT(*)::integer as transaction_count,
+          SUM(t.amount) as total_amount
+        FROM "transactions" t
+        WHERE t."agent_id" = ${franchiseId}
+          AND t."type" IN ('deposit', 'transfer')
+          AND t."customer_account" IS NOT NULL
+          AND t."customer_account" LIKE '01J7%'
+          AND t."customer_account" != ${franchise.accountNumber}
+          AND t."timestamp" >= ${startDate}
+          AND t."timestamp" <= ${endDate}
+          AND t."status" = 'completed'
+        GROUP BY t."customer_account"
+        HAVING COUNT(*) >= 1
+        ORDER BY transaction_count DESC, total_amount DESC
+      `
 
-      if (agentAssignments.length === 0) {
-        console.log(`No agents found for Franchise ${franchiseId}`)
+      if (detectedAgents.length === 0) {
+        console.log(`No transaction-detected agents for Franchise ${franchiseId}`)
 
         return null
       }
 
-      const agentIds = agentAssignments.map(a => a.localAgentId)
-      console.log(`Found ${agentIds.length} agents under Franchise ${franchise.name}`)
+      // Capital Advanced = total deposits TO agent accounts
+      const totalCapitalAdvanced = detectedAgents.reduce((sum: number, a: any) => sum + Number(a.total_amount), 0)
+      const totalTransactionCount = detectedAgents.reduce((sum: number, a: any) => sum + a.transaction_count, 0)
 
-      // Get transactions for all assigned agents in this period
-      const transactions = await prisma.transaction.groupBy({
-        by: ['agentId'],
-        where: {
-          agentId: { in: agentIds },
-          timestamp: {
-            gte: startDate,
-            lte: endDate
-          },
-          status: 'completed'
-        },
-        _sum: {
-          amount: true
-        },
-        _count: {
-          id: true
-        }
+      console.log(`Detected agents: ${detectedAgents.length}, Capital Advanced: ${totalCapitalAdvanced}`)
+
+      // Get actual turnover (transactions FROM those detected agents)
+      const accountNumbers = detectedAgents.map((a: any) => a.account_number)
+      const existingAgents = await prisma.agent.findMany({
+        where: { accountNumber: { in: accountNumbers } },
+        select: { id: true }
       })
+      const agentIds = existingAgents.map(a => a.id)
 
-      // Calculate total turnover (actual transactions)
-      const actualTurnover = transactions.reduce((sum, t) => sum + (t._sum.amount || 0), 0)
-      const totalTransactionCount = transactions.reduce((sum, t) => sum + t._count.id, 0)
+      let actualTurnover = 0
+      if (agentIds.length > 0) {
+        const turnoverResult = await prisma.transaction.aggregate({
+          where: {
+            agentId: { in: agentIds },
+            timestamp: { gte: startDate, lte: endDate },
+            status: 'completed'
+          },
+          _sum: { amount: true }
+        })
+        actualTurnover = turnoverResult._sum.amount || 0
+      }
 
-      console.log(`Capital Advanced: ${capitalAdvanced}`)
       console.log(`Actual Turnover: ${actualTurnover}`)
 
       // Calculate expected turnover
       const multiplier = config.franchiseMultiplier || 4.5
-      const expectedTurnover = capitalAdvanced * multiplier
+      const expectedTurnover = totalCapitalAdvanced * multiplier
 
-      console.log(`Expected Turnover (${multiplier}x): ${expectedTurnover}`)
-
-      // Calculate performance percentage
-      const performancePercentage = expectedTurnover > 0 ? (actualTurnover / expectedTurnover) * 100 : 0
+      // Performance percentage - cap at 100%
+      const performancePercentage = expectedTurnover > 0 ? Math.min((actualTurnover / expectedTurnover) * 100, 100) : 0
 
       console.log(`Performance: ${performancePercentage.toFixed(2)}%`)
 
-      // Get payband configuration
+      // Paybands
       const paybands = config.paybandRates
         ? typeof config.paybandRates === 'string'
           ? JSON.parse(config.paybandRates)
@@ -124,12 +122,11 @@ export class FranchiseCommission {
             { min: 0, max: 39, name: 'Poor', apportionRate: 0.2, clawbackPercentage: 80 }
           ]
 
-      // Find applicable payband
-      const applicablePayband = paybands.find((band: any) => {
-        const perfRounded = Math.floor(performancePercentage)
-
-        return perfRounded >= band.min && (band.max === Infinity || perfRounded <= band.max)
-      })
+      const perfRounded = Math.floor(performancePercentage)
+      const applicablePayband = paybands.find(
+        (band: any) =>
+          perfRounded >= band.min && (band.max === Infinity || band.max === null || perfRounded <= band.max)
+      )
 
       if (!applicablePayband) {
         console.log(`No payband found for performance ${performancePercentage}%`)
@@ -137,36 +134,21 @@ export class FranchiseCommission {
         return null
       }
 
-      console.log(`Applied Payband: ${applicablePayband.name} (${applicablePayband.apportionRate * 100}% apportion)`)
-
-      // Calculate base commission
-      const baseCommissionRate = config.franchiseBaseRate || 0.0005 // 0.05%
+      // Commission calculation (as per PDF spec)
+      const baseCommissionRate = config.franchiseBaseRate || 0.0005
       const baseCommission = actualTurnover * baseCommissionRate
-
-      // Apply apportion rate
       const finalCommission = baseCommission * applicablePayband.apportionRate
-
-      // Calculate clawback
       const clawbackAmount = baseCommission * (applicablePayband.clawbackPercentage / 100)
 
-      console.log(`Commission Calculation:`)
-      console.log(`  Base Commission (${(baseCommissionRate * 100).toFixed(2)}%): ${baseCommission.toFixed(2)}`)
-      console.log(`  Apportion Rate: ${(applicablePayband.apportionRate * 100).toFixed(0)}%`)
-      console.log(`  Final Commission: ${finalCommission.toFixed(2)}`)
-      console.log(`  Clawback: ${clawbackAmount.toFixed(2)}`)
+      console.log(`Payband: ${applicablePayband.name}, Commission: ${finalCommission}, Clawback: ${clawbackAmount}`)
 
-      // Save franchise performance data
+      // Save performance data
       await prisma.franchisePerformance.upsert({
-        where: {
-          franchiseId_period: {
-            franchiseId,
-            period
-          }
-        },
+        where: { franchiseId_period: { franchiseId, period } },
         create: {
           franchiseId,
           period,
-          totalCapitalAdvanced: capitalAdvanced,
+          totalCapitalAdvanced,
           expectedTurnover,
           actualTurnover,
           performancePct: Math.round(performancePercentage * 100) / 100,
@@ -175,7 +157,7 @@ export class FranchiseCommission {
           clawbackAmount
         },
         update: {
-          totalCapitalAdvanced: capitalAdvanced,
+          totalCapitalAdvanced,
           expectedTurnover,
           actualTurnover,
           performancePct: Math.round(performancePercentage * 100) / 100,
@@ -199,7 +181,7 @@ export class FranchiseCommission {
         finalCommission,
         clawback: clawbackAmount,
         performance: {
-          totalCapitalAdvanced: capitalAdvanced,
+          totalCapitalAdvanced,
           expectedTurnover,
           actualTurnover,
           performancePercentage: Math.round(performancePercentage * 100) / 100,

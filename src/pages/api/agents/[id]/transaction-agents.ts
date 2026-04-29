@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next/types'
 import { prisma } from '../../../../lib/db'
+import { Prisma } from '@prisma/client'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -13,6 +14,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const agentId = parseInt(id as string)
+  const period = req.query.period as string | undefined
 
   try {
     // Get the agent details
@@ -33,6 +35,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Threshold: 1 transaction
     const threshold = 1
 
+    // Parse period dates
+    let startDate: Date | undefined
+    let endDate: Date | undefined
+    if (period) {
+      const [year, month] = period.split('-')
+      startDate = new Date(parseInt(year), parseInt(month) - 1, 1)
+      endDate = new Date(parseInt(year), parseInt(month), 0, 23, 59, 59, 999)
+    }
+
     // Query to find unique agent accounts (starting with 01J7) that this agent has made deposits/transfers to
     const transactionAgents = await prisma.$queryRaw<any[]>`
       SELECT
@@ -47,6 +58,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         AND t."customer_account" IS NOT NULL
         AND t."customer_account" LIKE '01J7%'
         AND t."customer_account" != ${agent.accountNumber}
+        ${startDate ? Prisma.sql`AND t."timestamp" >= ${startDate}` : Prisma.empty}
+      ${endDate ? Prisma.sql`AND t."timestamp" <= ${endDate}` : Prisma.empty}
       GROUP BY t."customer_account"
       HAVING COUNT(*) >= ${threshold}
       ORDER BY transaction_count DESC, total_amount DESC
@@ -110,6 +123,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           AND t."customer_account" IS NOT NULL
           AND t."customer_account" LIKE '01J7%'
           AND t."customer_account" != ${agent.accountNumber}
+
         GROUP BY t."type"
       `
 

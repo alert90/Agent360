@@ -33,8 +33,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     let transactions: any[]
-    let totalCount = 0
-
     if (agent.type === 'super_agent' || agent.type === 'franchise') {
       // Get all agents under this super_agent/franchise
       const associatedAgents = await prisma.agent.findMany({
@@ -51,11 +49,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         transactions = []
       } else {
         // Count total
-        totalCount = await prisma.transaction.count({
-          where: {
-            OR: [{ agentId: { in: agentIds } }, { customerAccount: { in: accountNumbers } }]
-          }
-        })
 
         // Get paginated transactions
         transactions = await prisma.transaction.findMany({
@@ -69,11 +62,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     } else {
       // For regular agents
-      totalCount = await prisma.transaction.count({
-        where: {
-          OR: [{ agentId: agentId }, { customerAccount: agent.accountNumber }]
-        }
-      })
 
       transactions = await prisma.transaction.findMany({
         where: {
@@ -86,17 +74,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Calculate totals
-    const totalAmount = transactions.reduce((sum, tx) => sum + (tx.amount || 0), 0)
 
-    // Group by transaction type
+    const trueAggregate = await prisma.transaction.aggregate({
+      where: {
+        agentId: agentId
+      },
+      _sum: { amount: true },
+      _count: { id: true }
+    })
+
+    const allTransactions = await prisma.transaction.groupBy({
+      by: ['type'],
+      where: { agentId: agentId },
+      _count: { type: true },
+      _sum: { amount: true }
+    })
+
     const typeSummary: Record<string, { count: number; amount: number }> = {}
-    transactions.forEach(tx => {
+    allTransactions.forEach(tx => {
       const type = tx.type || 'UNKNOWN'
-      if (!typeSummary[type]) {
-        typeSummary[type] = { count: 0, amount: 0 }
-      }
-      typeSummary[type].count++
-      typeSummary[type].amount += tx.amount || 0
+      typeSummary[type] = { count: tx._count.type, amount: tx._sum.amount || 0 }
     })
 
     res.status(200).json({
@@ -105,12 +102,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       pagination: {
         page,
         limit,
-        total: totalCount,
-        totalPages: Math.ceil(totalCount / limit)
+        total: trueAggregate._count.id || 0,
+        totalPages: Math.ceil((trueAggregate._count.id || 0) / limit)
       },
       summary: {
-        totalTransactions: totalCount,
-        totalAmount,
+        totalTransactions: trueAggregate._count.id || 0,
+        totalAmount: trueAggregate._sum.amount || 0,
         byType: Object.entries(typeSummary).map(([type, data]) => ({
           type,
           count: data.count,

@@ -1,6 +1,8 @@
+// src/pages/api/dashboard/super-agent.ts
 import { NextApiRequest, NextApiResponse } from 'next/types'
 import jwt from 'jsonwebtoken'
 import { prisma } from '../../../lib/db'
+import { Prisma } from '@prisma/client'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -17,17 +19,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const decoded = jwt.verify(token, process.env.NEXT_PUBLIC_JWT_SECRET!) as { id: number }
     const user = await prisma.user.findUnique({
-      where: {
-        id: decoded.id,
-        isActive: true
-      }
+      where: { id: decoded.id, isActive: true }
     })
 
     if (!user || user.role !== 'super_agent') {
       return res.status(403).json({ message: 'Access denied' })
     }
 
-    const superAgentData = await getSuperAgentData(decoded.id)
+    // Check if user has a linked account number
+    if (!user.accountNumber) {
+      return res.status(400).json({ message: 'No account linked to this user' })
+    }
+
+    const superAgentData = await getSuperAgentData(user)
 
     res.status(200).json(superAgentData)
   } catch (error) {
@@ -36,127 +40,108 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 }
 
-async function getSuperAgentData(userId: number) {
+async function getSuperAgentData(user: any) {
+  // Find the agent by matching the user's accountNumber
   const superAgent = await prisma.agent.findFirst({
     where: {
-      id: userId,
+      accountNumber: user.accountNumber,
       type: 'super_agent',
       isActive: 1
-    },
-    include: {
-      parentAgent: true
     }
   })
 
   if (!superAgent) {
-    throw new Error('Super agent record not found')
+    throw new Error(`Super Agent not found for account ${user.accountNumber}`)
   }
 
   const superAgentId = superAgent.id
 
-  const agentsServed = await prisma.agent.count({
-    where: {
-      parentAgentId: superAgentId,
-      type: 'local_agent',
-      isActive: 1
-    }
+  // Get child agents
+  const childAgents = await prisma.agent.findMany({
+    where: { parentAgentId: superAgentId, isActive: 1 },
+    select: { id: true }
   })
 
+  const childAgentIds = childAgents.map(a => a.id)
+  const agentsServed = childAgents.length
+
+  // Transaction data
   const transactionsCompleted = await prisma.transaction.aggregate({
     where: {
-      agent: {
-        parentAgentId: superAgentId
-      },
+      agentId: { in: childAgentIds },
       status: 'completed'
     },
-    _count: {
-      id: true
-    },
-    _sum: {
-      amount: true
-    }
+    _count: { id: true },
+    _sum: { amount: true }
   })
 
+  // Commission data
   const commissionData = await prisma.agent.aggregate({
     where: {
       parentAgentId: superAgentId,
       isActive: 1
     },
-    _sum: {
-      commissionAmount: true
-    }
+    _sum: { commissionAmount: true }
   })
 
+  // Recent transactions
   const recentTransactions = await prisma.transaction.findMany({
     where: {
-      agent: {
-        parentAgentId: superAgentId
-      }
+      agentId: { in: childAgentIds }
     },
     include: {
       agent: {
-        select: {
-          name: true,
-          branchName: true
-        }
+        select: { name: true, branchName: true }
       }
     },
-    orderBy: {
-      timestamp: 'desc'
-    },
+    orderBy: { timestamp: 'desc' },
     take: 10
   })
 
+  // Monthly performance
   const monthlyPerformance = await prisma.$queryRaw`
     SELECT
       TO_CHAR(DATE_TRUNC('month', t."timestamp"), 'YYYY-MM') as month,
       COUNT(*)::integer as "transactionCount",
       COALESCE(SUM(t."amount"), 0)::numeric as "totalAmount",
-      COALESCE(SUM(CASE WHEN t."commissionEligible" = true THEN t."commissionAmount" ELSE 0 END), 0)::numeric as "commissionEarned"
+      COALESCE(SUM(t."commission_amount"), 0)::numeric as "commissionEarned"
     FROM "transactions" t
-    JOIN "agents" a ON t."agentId" = a.id
-    WHERE a."parentAgentId" = ${superAgentId} AND t.status = 'completed'
+    WHERE t."agent_id" IN (${Prisma.join(childAgentIds)})
+      AND t.status = 'completed'
     GROUP BY DATE_TRUNC('month', t."timestamp")
     ORDER BY DATE_TRUNC('month', t."timestamp") DESC
     LIMIT 6
   `
 
+  // Agent performance - top 10 agents
   const agentPerformance = await prisma.agent.findMany({
     where: {
       parentAgentId: superAgentId,
       type: 'local_agent',
       isActive: 1
     },
-    orderBy: {
-      totalTransactionAmount: 'desc'
-    },
+    orderBy: { totalTransactionAmount: 'desc' },
     take: 10,
-    include: {
-      transactions: {
-        where: {
-          status: 'completed'
-        },
-        take: 100 // Limit to avoid huge data
-      }
+    select: {
+      id: true,
+      name: true,
+      accountNumber: true,
+      branchName: true,
+      transactionCount: true,
+      totalTransactionAmount: true,
+      commissionAmount: true
     }
   })
 
-  const processedAgentPerformance = agentPerformance.map(agent => {
-    const totalAmount = agent.transactions.reduce((sum, tx) => sum + Number(tx.amount || 0), 0)
-    const commissionEarned = agent.transactions.reduce((sum, tx) => {
-      return sum + (tx.commissionEligible ? Number(tx.commissionAmount || 0) : 0)
-    }, 0)
-
-    return {
-      id: agent.id,
-      name: agent.name,
-      accountNumber: agent.accountNumber,
-      branchName: agent.branchName,
-      transactionCount: agent.transactions.length,
-      totalAmount,
-      commissionEarned
-    }
-  })
+  const processedAgentPerformance = agentPerformance.map(agent => ({
+    id: agent.id,
+    name: agent.name,
+    accountNumber: agent.accountNumber,
+    branchName: agent.branchName,
+    transactionCount: agent.transactionCount || 0,
+    totalAmount: agent.totalTransactionAmount || 0,
+    commissionEarned: agent.commissionAmount || 0
+  }))
 
   return {
     superAgent: {
